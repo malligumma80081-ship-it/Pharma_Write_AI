@@ -122,3 +122,46 @@ This is a prototype and not a final clinical or regulatory system. It is intende
 ## Project status
 
 Current stage: early prototype / Day 1 foundation.
+
+
+## day -2 Database Connections 
+
+for PostgreSQL is used to connect the project and it is working 
+
+## Install dependency 
+python -m pip install sqlalchemy "psycopg[binary]" alembic
+## Create database
+CREATE DATABASE pharmawrite;
+
+## Requirements.txt  
+fastapi
+uvicorn[standard]
+streamlit
+requests
+pydantic-settings
+sqlalchemy
+psycopg[binary]
+alembic
+python-dotenv
+
+## Database URL
+DATABASE_URL=postgresql+psycopg://postgres:YOUR_PASSWORD@localhost:5432/pharmawrite
+
+## Folder Structure for Database connections
+
+app/
+├── db/
+│   ├── __init__.py
+│   ├── session.py
+│   └── models.py
+├── schemas/
+│   ├── __init__.py
+│   └── project.py
+├── api/
+│   ├── __init__.py
+│   └── routes/
+│       ├── __init__.py
+│       └── projects.py
+├── config.py
+├── main.py
+└── llm.py
