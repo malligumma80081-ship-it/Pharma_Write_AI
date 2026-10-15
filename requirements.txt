@@ -3,3 +3,7 @@ uvicorn[standard]
 streamlit
 requests
 pydantic-settings
+sqlalchemy
+psycopg[binary]
+alembic
+python-dotenv
