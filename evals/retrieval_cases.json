@@ -1,0 +1,51 @@
+[
+  {
+    "case_id": "AE-001",
+    "query": "What adverse events were reported during treatment?",
+    "project_id": "REPLACE_WITH_PROJECT_UUID",
+    "relevant_chunk_ids": [
+      "REPLACE_WITH_RELEVANT_CHUNK_ID"
+    ]
+  },
+  {
+    "case_id": "POP-001",
+    "query": "What was the study population and sample size?",
+    "project_id": "REPLACE_WITH_PROJECT_UUID",
+    "relevant_chunk_ids": [
+      "REPLACE_WITH_RELEVANT_CHUNK_ID"
+    ]
+  },
+  {
+    "case_id": "OUT-001",
+    "query": "What primary outcome did the study measure?",
+    "project_id": "REPLACE_WITH_PROJECT_UUID",
+    "relevant_chunk_ids": [
+      "REPLACE_WITH_RELEVANT_CHUNK_ID"
+    ]
+  },
+  {
+    "case_id": "R001",
+    "question": "What was the sample size in the study?",
+    "relevant_chunk_ids": [
+      "replace-with-real-chunk-id-1",
+      "replace-with-real-chunk-id-2"
+    ],
+    "k": 5
+  },
+  {
+    "case_id": "R002",
+    "question": "Which adverse events were reported?",
+    "relevant_chunk_ids": [
+      "replace-with-real-chunk-id-3"
+    ],
+    "k": 5
+  },
+  {
+    "case_id": "R003",
+    "question": "What limitations did the authors report?",
+    "relevant_chunk_ids": [
+      "replace-with-real-chunk-id-4"
+    ],
+    "k": 5
+  }
+]

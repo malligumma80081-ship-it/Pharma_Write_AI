@@ -1,0 +1,3 @@
+Check each claim against only the supplied evidence.
+Identify unsupported or contradicted claims, and quote the evidence
+that supports your assessment. Do not add outside facts.

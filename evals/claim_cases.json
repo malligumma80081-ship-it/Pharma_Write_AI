@@ -1,0 +1,27 @@
+
+[
+  {
+    "case_id": "C001",
+    "claim": "The study enrolled 120 participants.",
+    "evidence": "The study enrolled 120 participants.",
+    "expected_label": "supported"
+  },
+  {
+    "case_id": "C002",
+    "claim": "The study enrolled 500 participants.",
+    "evidence": "The study enrolled 120 participants.",
+    "expected_label": "contradicted"
+  },
+  {
+    "case_id": "C003",
+    "claim": "The treatment reduced mortality by 50%.",
+    "evidence": "The passage describes the study design but does not report mortality results.",
+    "expected_label": "insufficient_evidence"
+  },
+  {
+    "case_id": "C004",
+    "claim": "The treatment was effective in every patient.",
+    "evidence": "The study reports improvement in a subset of participants.",
+    "expected_label": "contradicted"
+  }
+]

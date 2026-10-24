@@ -1,0 +1,60 @@
+{
+  "evaluation_type": "retrieval",
+  "case_count": 0,
+  "skipped_case_count": 6,
+  "mean_recall": null,
+  "mean_precision": null,
+  "mean_reciprocal_rank": null,
+  "cases": [],
+  "skipped_cases": [
+    {
+      "case_id": "AE-001",
+      "question": "What adverse events were reported during treatment?",
+      "reason": "Replace placeholder relevant_chunk_ids with manually verified chunk IDs before scoring this case.",
+      "placeholder_chunk_ids": [
+        "REPLACE_WITH_RELEVANT_CHUNK_ID"
+      ]
+    },
+    {
+      "case_id": "POP-001",
+      "question": "What was the study population and sample size?",
+      "reason": "Replace placeholder relevant_chunk_ids with manually verified chunk IDs before scoring this case.",
+      "placeholder_chunk_ids": [
+        "REPLACE_WITH_RELEVANT_CHUNK_ID"
+      ]
+    },
+    {
+      "case_id": "OUT-001",
+      "question": "What primary outcome did the study measure?",
+      "reason": "Replace placeholder relevant_chunk_ids with manually verified chunk IDs before scoring this case.",
+      "placeholder_chunk_ids": [
+        "REPLACE_WITH_RELEVANT_CHUNK_ID"
+      ]
+    },
+    {
+      "case_id": "R001",
+      "question": "What was the sample size in the study?",
+      "reason": "Replace placeholder relevant_chunk_ids with manually verified chunk IDs before scoring this case.",
+      "placeholder_chunk_ids": [
+        "replace-with-real-chunk-id-1",
+        "replace-with-real-chunk-id-2"
+      ]
+    },
+    {
+      "case_id": "R002",
+      "question": "Which adverse events were reported?",
+      "reason": "Replace placeholder relevant_chunk_ids with manually verified chunk IDs before scoring this case.",
+      "placeholder_chunk_ids": [
+        "replace-with-real-chunk-id-3"
+      ]
+    },
+    {
+      "case_id": "R003",
+      "question": "What limitations did the authors report?",
+      "reason": "Replace placeholder relevant_chunk_ids with manually verified chunk IDs before scoring this case.",
+      "placeholder_chunk_ids": [
+        "replace-with-real-chunk-id-4"
+      ]
+    }
+  ]
+}
