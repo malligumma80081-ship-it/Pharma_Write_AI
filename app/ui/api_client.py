@@ -16,7 +16,7 @@ class APIError(Exception):
     pass
 
 
-def login(email: str, password: str) -> dict:
+def login(email: str, password: str) -> dict | None:
     return request_json(
         "POST",
         "/api/v1/auth/login",
@@ -24,7 +24,7 @@ def login(email: str, password: str) -> dict:
     )
 
 
-def register(email: str, password: str) -> dict:
+def register(email: str, password: str) -> dict | None:
     return request_json(
         "POST",
         "/api/v1/auth/register",
@@ -32,8 +32,15 @@ def register(email: str, password: str) -> dict:
     )
 
 
-def get_current_user(token: str) -> dict:
+def get_current_user(token: str) -> dict | None:
     return request_json("GET", "/api/v1/auth/me", token=token)
+
+
+def get_ollama_status() -> dict:
+    response = request_json("GET", "/health/ollama")
+    if not isinstance(response, dict):
+        raise APIError("The API returned an invalid Ollama status response.")
+    return response
 
 
 def request_json(method, path, **kwargs):
@@ -107,7 +114,7 @@ def start_workflow(
             "document_ids": document_ids,
             "top_k": top_k,
         },
-        timeout=300,
+        timeout=1900,
     )
 
 
@@ -115,6 +122,23 @@ def get_workflow(project_id: str, workflow_id: str, token: str):
     return request_json(
         "GET",
         f"/api/v1/projects/{project_id}/workflows/{workflow_id}",
+        token=token,
+    )
+
+
+def submit_for_review(project_id: str, workflow_id: str, token: str):
+    return request_json(
+        "POST",
+        f"/api/v1/projects/{project_id}/workflows/"
+        f"{workflow_id}/submit-review",
+        token=token,
+    )
+
+
+def get_review_queue(token: str):
+    return request_json(
+        "GET",
+        "/api/v1/review-queue/",
         token=token,
     )
 

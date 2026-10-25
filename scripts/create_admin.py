@@ -9,6 +9,9 @@ def main():
     email = input("Admin email: ").strip().lower()
     password = getpass.getpass("Admin password (12+ characters): ")
 
+    if SessionLocal is None:
+        raise RuntimeError("Database session factory is not configured.")
+
     db = SessionLocal()
     try:
         existing = db.query(User).filter(User.email == email).first()

@@ -15,7 +15,7 @@ st.caption("Scientific literature review workspace")
 project_id = st.text_input("Project ID (integer)")
 research_question = st.text_area(
     "Research question",
-    placeholder="Summarize study design, outcomes, adverse events, and limitations...",
+    placeholder="Enter the research question or topic to investigate using the selected documents...",
 )
 
 document_ids_text = st.text_area(

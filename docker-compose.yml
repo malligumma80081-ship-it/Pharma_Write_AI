@@ -1,31 +1,74 @@
 services:
-  db:
-    image: postgres:16
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: pharmawrite
-      POSTGRES_USER: pharmawrite
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pharmawrite_dev}
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pharmawrite -d pharmawrite"]
-      interval: 5s
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 10s
       timeout: 5s
       retries: 10
 
+  ollama:
+    image: ollama/ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: postgresql+psycopg://pharmawrite:${POSTGRES_PASSWORD:-pharmawrite_dev}@db:5432/pharmawrite
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      DATABASE_URL: ${DATABASE_URL}
+      OLLAMA_BASE_URL: http://ollama:11434
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - chroma_data:/app/data/chroma
     depends_on:
-      db:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  UI:
+    build:
+      context: .
+      dockerfile: Dockerfile.UI
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PHARMAWRITE_API_URL: http://api:8000
+    ports:
+      - "127.0.0.1:8501:8501"
+    depends_on:
+      api:
         condition: service_healthy
 
 volumes:
   postgres_data:
+  chroma_data:
+  ollama_data:
+

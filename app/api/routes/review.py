@@ -2,6 +2,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.auth import get_current_user, require_roles
@@ -13,6 +14,7 @@ from app.schemas.review import (
     DraftReviewResponse,
     ReviewDecisionRequest,
 )
+from app.db.models import DraftRevision, LiteratureWorkflow, Project
 from app.services.review_service import (
     ReviewConflictError,
     ReviewError,
@@ -24,6 +26,11 @@ from app.services.review_service import (
 
 router = APIRouter(
     prefix="/api/v1/projects",
+    tags=["Draft Review"],
+    dependencies=[Depends(require_roles("reviewer", "admin"))],
+)
+review_queue_router = APIRouter(
+    prefix="/api/v1/review-queue",
     tags=["Draft Review"],
     dependencies=[Depends(require_roles("reviewer", "admin"))],
 )
@@ -50,6 +57,50 @@ def handle_error(error):
     if isinstance(error, ReviewError):
         raise HTTPException(status_code=400, detail=str(error)) from error
     raise error
+
+
+@review_queue_router.get("/")
+def read_review_queue(
+    db: Session = Depends(get_db),
+):
+    workflows = db.scalars(
+        select(LiteratureWorkflow)
+        .join(Project, Project.id == LiteratureWorkflow.project_id)
+        .where(
+            LiteratureWorkflow.status == "completed",
+            LiteratureWorkflow.current_stage == "submitted_to_team_lead",
+        )
+        .order_by(LiteratureWorkflow.updated_at.asc())
+        .limit(100)
+    ).all()
+
+    queue = []
+    for workflow in workflows:
+        revision = db.scalar(
+            select(DraftRevision)
+            .where(DraftRevision.workflow_id == workflow.id)
+            .order_by(DraftRevision.version_number.desc())
+            .limit(1)
+        )
+        if revision is None or revision.status != "pending_review":
+            continue
+
+        project = db.get(Project, workflow.project_id)
+        queue.append(
+            {
+                "project_id": workflow.project_id,
+                "project_name": project.name if project else "Unknown project",
+                "workflow_id": str(workflow.id),
+                "research_question": workflow.research_question,
+                "review_status": (
+                    "pending_human_review"
+                    if revision.status == "pending_review"
+                    else revision.status
+                ),
+                "submitted_at": workflow.updated_at.isoformat(),
+            }
+        )
+    return {"items": queue}
 
 
 @router.get(
@@ -131,6 +182,20 @@ def record_decision(
             comment=request.comment,
             reviewer_id=str(reviewer.id),
         )
+        workflow = db.scalar(
+            select(LiteratureWorkflow).where(
+                LiteratureWorkflow.id == workflow_id,
+                LiteratureWorkflow.project_id == project_id,
+            )
+        )
+        if workflow is not None:
+            workflow.current_stage = (
+                "approved_by_team_lead"
+                if request.decision == "approved"
+                else "changes_requested_by_team_lead"
+            )
+            db.add(workflow)
+            db.commit()
 
         return serialize_revision(revision)
     except ReviewError as error:

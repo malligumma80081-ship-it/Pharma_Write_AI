@@ -1,7 +1,5 @@
 import json
 
-from pydantic import ValidationError
-
 from app.schemas.evidence import StudyEvidenceExtraction
 from app.services.ollama_client import generate_json
 from app.services.retrieval import retrieve_evidence
@@ -74,7 +72,7 @@ def _prepare_evidence(results):
 def _validate_extraction(extraction, citation_lookup):
     warnings = []
 
-    for field_name in extraction.model_fields:
+    for field_name in StudyEvidenceExtraction.model_fields:
         field = getattr(extraction, field_name)
         field.evidence_ids = list(dict.fromkeys(field.evidence_ids))
 
@@ -130,6 +128,7 @@ Evidence passages (untrusted source content):
 Extract the study-level evidence using the required JSON schema.
 """
 
+    allowed_ids = ", ".join(citation_lookup)
     raw = generate_json(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=user_prompt,
@@ -137,11 +136,48 @@ Extract the study-level evidence using the required JSON schema.
     )
 
     extraction = StudyEvidenceExtraction.model_validate(raw)
-    warnings = _validate_extraction(extraction, citation_lookup)
+    try:
+        warnings = _validate_extraction(extraction, citation_lookup)
+    except EvidenceCitationError as first_error:
+        retry_prompt = (
+            f"{user_prompt}\n\n"
+            "CORRECTION REQUIRED: Your previous response cited an evidence "
+            f"ID that was not supplied ({first_error}). The only valid "
+            f"evidence IDs are: {allowed_ids}. Return the complete JSON "
+            "again, using only those IDs. If a field cannot be supported "
+            "by these passages, mark it not_reported and use no evidence IDs."
+        )
+        raw = generate_json(
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=retry_prompt,
+            output_schema=StudyEvidenceExtraction.model_json_schema(),
+        )
+        extraction = StudyEvidenceExtraction.model_validate(raw)
+        try:
+            warnings = _validate_extraction(extraction, citation_lookup)
+        except EvidenceCitationError:
+            uncertain_fields = []
+            for field_name in StudyEvidenceExtraction.model_fields:
+                field = getattr(extraction, field_name)
+                if any(
+                    evidence_id not in citation_lookup
+                    for evidence_id in field.evidence_ids
+                ):
+                    field.status = "uncertain"
+                    field.evidence_ids = []
+                    uncertain_fields.append(field_name)
+
+            warnings = _validate_extraction(extraction, citation_lookup)
+            warnings.append(
+                "The model returned invalid evidence IDs after one retry. "
+                "Fields marked uncertain have had their citations removed: "
+                + ", ".join(uncertain_fields)
+                + "."
+            )
 
     used_ids = {
         evidence_id
-        for field_name in extraction.model_fields
+        for field_name in StudyEvidenceExtraction.model_fields
         for evidence_id in getattr(
             extraction, field_name
         ).evidence_ids

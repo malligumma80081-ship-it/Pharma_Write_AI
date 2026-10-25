@@ -6,7 +6,11 @@ from sqlalchemy.orm import Session
 from app.db.models import Document, LiteratureWorkflow
 from app.services.chunking import TextChunk
 from app.services.vector_store import index_chunks
-from app.services.evidence_extractor import extract_study_evidence
+from app.services.evidence_extractor import (
+    EvidenceCitationError,
+    extract_study_evidence,
+)
+from app.services.ollama_client import OllamaError
 from app.services.rag_writer import generate_literature_draft
 
 logger = logging.getLogger(__name__)
@@ -178,7 +182,11 @@ def run_literature_workflow(
             workflow.status = "failed"
             workflow.current_stage = "failed"
             workflow.error_message = (
-                str(exc) if isinstance(exc, ValueError)
+                str(exc)
+                if isinstance(
+                    exc,
+                    (ValueError, OllamaError, EvidenceCitationError),
+                )
                 else "Workflow failed. Check server logs."
             )
             db.add(workflow)

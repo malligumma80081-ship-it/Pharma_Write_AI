@@ -12,6 +12,9 @@ from app.db.models import Base, LiteratureWorkflow, Project, User
 from app.db.session import get_db
 from app.main import app
 
+REVIEWER_ID = UUID("79072db6-e0c7-442b-965d-45a6ee446bd4")
+WRITER_ID = UUID("d9cb9f04-beba-4bdb-ae8c-3c7200210102")
+
 
 @pytest.fixture
 def review_client():
@@ -29,19 +32,29 @@ def review_client():
 
     app.dependency_overrides[get_db] = override_get_db
     reviewer = User(
-        id=UUID("79072db6-e0c7-442b-965d-45a6ee446bd4"),
+        id=REVIEWER_ID,
         email="reviewer@example.com",
         hashed_password="not-used-in-tests",
         role="reviewer",
+        is_active=True,
+    )
+    writer = User(
+        id=WRITER_ID,
+        email="writer@example.com",
+        hashed_password="not-used-in-tests",
+        role="writer",
         is_active=True,
     )
     app.dependency_overrides[get_current_user] = lambda: reviewer
     try:
         with TestClient(app) as client:
             with test_session() as db:
+                db.add_all([reviewer, writer])
+                db.flush()
                 project = Project(
                     name="Draft review API project",
                     research_question="Does draft review preserve versions?",
+                    owner_id=WRITER_ID,
                 )
                 db.add(project)
                 db.flush()
@@ -156,7 +169,7 @@ def test_review_edit_decision_and_history_endpoints(review_client):
 def test_writer_cannot_access_review_endpoints(review_client):
     client, project_id, workflow_id = review_client
     writer = User(
-        id=UUID("d9cb9f04-beba-4bdb-ae8c-3c7200210102"),
+        id=WRITER_ID,
         email="writer@example.com",
         hashed_password="not-used-in-tests",
         role="writer",
@@ -169,6 +182,83 @@ def test_writer_cannot_access_review_endpoints(review_client):
     )
 
     assert response.status_code == 403
+
+
+def test_writer_submits_pending_summary_to_team_lead_queue(review_client):
+    client, project_id, workflow_id = review_client
+    writer = User(
+        id=WRITER_ID,
+        email="writer@example.com",
+        hashed_password="not-used-in-tests",
+        role="writer",
+        is_active=True,
+    )
+    app.dependency_overrides[get_current_user] = lambda: writer
+
+    submitted = client.post(
+        f"/api/v1/projects/{project_id}/workflows/"
+        f"{workflow_id}/submit-review"
+    )
+    assert submitted.status_code == 200, submitted.text
+    assert submitted.json()["current_stage"] == "submitted_to_team_lead"
+
+    status = client.get(
+        f"/api/v1/projects/{project_id}/workflows/{workflow_id}"
+    )
+    assert status.status_code == 200
+    assert status.json()["review_status"] == "pending_human_review"
+
+    reviewer = User(
+        id=REVIEWER_ID,
+        email="reviewer@example.com",
+        hashed_password="not-used-in-tests",
+        role="reviewer",
+        is_active=True,
+    )
+    app.dependency_overrides[get_current_user] = lambda: reviewer
+    queue = client.get("/api/v1/review-queue/")
+
+    assert queue.status_code == 200, queue.text
+    assert len(queue.json()["items"]) == 1
+    assert queue.json()["items"][0]["workflow_id"] == str(workflow_id)
+
+
+def test_writer_can_download_only_after_team_lead_approval(review_client):
+    client, project_id, workflow_id = review_client
+    writer = User(
+        id=WRITER_ID,
+        email="writer@example.com",
+        hashed_password="not-used-in-tests",
+        role="writer",
+        is_active=True,
+    )
+    app.dependency_overrides[get_current_user] = lambda: writer
+
+    export_url = (
+        f"/api/v1/projects/{project_id}/workflows/{workflow_id}/export"
+    )
+    blocked = client.get(export_url, params={"format": "pdf"})
+    assert blocked.status_code == 409
+
+    reviewer = User(
+        id=REVIEWER_ID,
+        email="reviewer@example.com",
+        hashed_password="not-used-in-tests",
+        role="reviewer",
+        is_active=True,
+    )
+    app.dependency_overrides[get_current_user] = lambda: reviewer
+    decision = client.post(
+        f"/api/v1/projects/{project_id}/workflows/"
+        f"{workflow_id}/review/decision",
+        json={"decision": "approved", "comment": "Team Lead approved."},
+    )
+    assert decision.status_code == 200, decision.text
+
+    app.dependency_overrides[get_current_user] = lambda: writer
+    approved_export = client.get(export_url, params={"format": "pdf"})
+    assert approved_export.status_code == 200
+    assert approved_export.headers["content-type"] == "application/pdf"
 
 
 def test_review_rejects_invalid_workflow_and_project_ids(review_client):

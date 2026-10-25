@@ -70,12 +70,51 @@ OLLAMA_BASE_URL = os.getenv(
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 
 OLLAMA_TIMEOUT_SECONDS = int(
-    os.getenv("OLLAMA_TIMEOUT_SECONDS", "180")
+    os.getenv("OLLAMA_TIMEOUT_SECONDS", "900")
 )
 
 
 class OllamaError(Exception):
     """Raised when Ollama generation fails."""
+
+
+def get_ollama_status() -> dict:
+    try:
+        response = requests.get(
+            f"{OLLAMA_BASE_URL}/api/tags",
+            timeout=5,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        return {
+            "status": "disconnected",
+            "model": OLLAMA_MODEL,
+            "model_available": False,
+        }
+
+    try:
+        models = response.json().get("models", [])
+    except (ValueError, AttributeError):
+        return {
+            "status": "connected",
+            "model": OLLAMA_MODEL,
+            "model_available": False,
+        }
+
+    model_available = any(
+        isinstance(model, dict)
+        and isinstance(model.get("name"), str)
+        and (
+            model["name"] == OLLAMA_MODEL
+            or model["name"].startswith(f"{OLLAMA_MODEL}:")
+        )
+        for model in models
+    )
+    return {
+        "status": "connected",
+        "model": OLLAMA_MODEL,
+        "model_available": model_available,
+    }
 
 
 def generate_json(
@@ -121,7 +160,9 @@ def generate_json(
 
     except requests.Timeout as exc:
         raise OllamaError(
-            "Ollama generation timed out."
+            "Ollama generation timed out after "
+            f"{OLLAMA_TIMEOUT_SECONDS} seconds. The model may be overloaded "
+            "or too slow for the current hardware."
         ) from exc
     except requests.RequestException as exc:
         raise OllamaError(

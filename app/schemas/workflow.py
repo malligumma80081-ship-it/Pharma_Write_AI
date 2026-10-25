@@ -26,5 +26,6 @@ class WorkflowStatusResponse(BaseModel):
     project_id: int
     status: str
     current_stage: str
+    review_status: str | None = None
     result: dict | None = None
     error_message: str | None = None

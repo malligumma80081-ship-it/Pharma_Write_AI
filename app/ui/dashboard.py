@@ -2,6 +2,7 @@ import json
 import sys
 from pathlib import Path
 
+import requests
 import streamlit as st
 
 if __package__ in (None, ""):
@@ -12,13 +13,16 @@ try:
         APIError,
         download_export,
         get_current_user,
+        get_ollama_status,
         get_review,
+        get_review_queue,
         get_workflow,
         login,
         register,
         record_decision,
         save_review,
         start_workflow,
+        submit_for_review,
         upload_pdf,
     )
 except ImportError:
@@ -26,13 +30,16 @@ except ImportError:
         APIError,
         download_export,
         get_current_user,
+        get_ollama_status,
         get_review,
+        get_review_queue,
         get_workflow,
         login,
         register,
         record_decision,
         save_review,
         start_workflow,
+        submit_for_review,
         upload_pdf,
     )
 
@@ -53,6 +60,7 @@ def clear_auth_state():
         "project_id",
         "workflow_uuid",
         "created_workflow_id",
+        "created_workflow_project_id",
         "review_data",
         "export_pdf",
         "export_docx",
@@ -76,6 +84,8 @@ if not st.session_state.get("access_token"):
         if login_submitted:
             try:
                 token_response = login(login_email.strip(), login_password)
+                if token_response is None:
+                    raise KeyError("access_token")
                 token = token_response["access_token"]
                 user = get_current_user(token)
                 st.session_state["access_token"] = token
@@ -116,7 +126,7 @@ if not st.session_state.get("access_token"):
                         register_password,
                     )
                     st.success(
-                        f"Account created for {created_user['email']}. "
+                        f"Account created for {register_email.strip()}. "
                         "Sign in to continue."
                     )
                 except APIError as exc:
@@ -131,11 +141,38 @@ except APIError as exc:
     st.error(f"Your session is no longer valid. Please sign in again. {exc}")
     st.stop()
 
+if not isinstance(current_user, dict):
+    clear_auth_state()
+    st.error("Your session is no longer valid. Please sign in again.")
+    st.stop()
+
 role = current_user.get("role")
 role_pages = {
-    "writer": ["Overview", "Documents", "Generate Draft"],
-    "reviewer": ["Overview", "Review & Export"],
-    "admin": ["Overview", "Documents", "Generate Draft", "Review & Export"],
+    "writer": [
+        "Overview",
+        "Documents",
+        "Generate Draft",
+        "Summary & Submit",
+        "PDF Download",
+        "Word Download",
+    ],
+    "reviewer": [
+        "Overview",
+        "Team Lead Queue",
+        "Review & Export",
+        "PDF Download",
+        "Word Download",
+    ],
+    "admin": [
+        "Overview",
+        "Documents",
+        "Generate Draft",
+        "Summary & Submit",
+        "Team Lead Queue",
+        "Review & Export",
+        "PDF Download",
+        "Word Download",
+    ],
 }
 if role not in role_pages:
     st.error("Your account has no recognized role. Contact an administrator.")
@@ -150,12 +187,32 @@ if st.sidebar.button("Log out"):
 page = st.sidebar.radio(
     "Navigation",
     role_pages[role],
+    key="navigation",
 )
 
 st.sidebar.info(
     "AI-generated scientific content must be reviewed by a qualified human "
     "before external use."
 )
+
+if st.sidebar.button("Check AI connection"):
+    try:
+        ollama_status = get_ollama_status()
+        if ollama_status["status"] == "connected":
+            st.sidebar.success("AI service: Connected")
+            if ollama_status["model_available"]:
+                st.sidebar.caption(
+                    f"Model {ollama_status['model']} is available."
+                )
+            else:
+                st.sidebar.warning(
+                    f"Connected, but model {ollama_status['model']} "
+                    "is not installed."
+                )
+        else:
+            st.sidebar.error("AI service: Disconnected")
+    except APIError as exc:
+        st.sidebar.error(f"Could not check AI service: {exc}")
 
 project_id = st.sidebar.text_input(
     "Project ID (integer)",
@@ -166,6 +223,102 @@ workflow_id = st.sidebar.text_input("Workflow UUID", key="workflow_uuid").strip(
 
 def show_api_error(exc: APIError):
     st.error(str(exc))
+
+
+def show_ollama_status(container):
+    try:
+        ollama_status = get_ollama_status()
+    except APIError as exc:
+        container.error(f"Could not check AI service: {exc}")
+        return
+
+    if ollama_status["status"] != "connected":
+        container.error("AI service: Disconnected")
+    elif ollama_status["model_available"]:
+        container.success(
+            f"AI service: Connected · Model {ollama_status['model']} available"
+        )
+    else:
+        container.warning(
+            f"AI service: Connected, but model {ollama_status['model']} "
+            "is not installed."
+        )
+
+
+def select_queue_workflow(item):
+    st.session_state["project_id"] = str(item["project_id"])
+    st.session_state["workflow_uuid"] = item["workflow_id"]
+    st.session_state["navigation"] = "Review & Export"
+
+
+def select_created_workflow():
+    st.session_state["project_id"] = st.session_state[
+        "created_workflow_project_id"
+    ]
+    st.session_state["workflow_uuid"] = st.session_state[
+        "created_workflow_id"
+    ]
+
+
+def render_download_page(file_format: str):
+    label = "PDF" if file_format == "pdf" else "Word document"
+    st.subheader(f"Download {label}")
+
+    if not project_id or not workflow_id:
+        st.info("Enter the project ID and workflow UUID in the sidebar.")
+        return
+
+    try:
+        workflow = get_workflow(project_id, workflow_id, access_token)
+    except APIError as exc:
+        show_api_error(exc)
+        return
+
+    if not isinstance(workflow, dict):
+        st.error("Could not load workflow details.")
+        return
+
+    review_status = workflow.get("review_status")
+    st.caption(
+        f"Workflow: {workflow.get('status', 'unknown')} · "
+        f"Review: {review_status or 'pending_human_review'}"
+    )
+    if review_status != "approved":
+        st.info(
+            "Downloads are available after the Team Lead approves the summary."
+        )
+        return
+
+    mime_type = (
+        "application/pdf"
+        if file_format == "pdf"
+        else (
+            "application/vnd.openxmlformats-officedocument."
+            "wordprocessingml.document"
+        )
+    )
+    if st.button(f"Prepare {label}", type="primary"):
+        try:
+            response = download_export(
+                project_id,
+                workflow_id,
+                file_format,
+                access_token,
+            )
+            response.raise_for_status()
+            st.session_state[f"approved_export_{file_format}"] = response.content
+        except requests.RequestException as exc:
+            st.error(f"Could not prepare the {label} download: {exc}")
+
+    data = st.session_state.get(f"approved_export_{file_format}")
+    if data:
+        st.download_button(
+            f"Download {label}",
+            data=data,
+            file_name=f"pharmawrite_review.{file_format}",
+            mime=mime_type,
+            key=f"approved_download_{file_format}",
+        )
 
 
 if page == "Overview":
@@ -237,8 +390,8 @@ elif page == "Generate Draft":
         question = st.text_area(
             "Research question",
             placeholder=(
-                "Example: What study design, sample size, outcomes, and "
-                "limitations are reported in the included papers?"
+                "Enter any research question or topic to investigate using "
+                "the selected documents."
             ),
             height=120,
         )
@@ -280,17 +433,155 @@ elif page == "Generate Draft":
                     new_id = result.get("workflow_id") or result.get("id")
                     if new_id:
                         st.session_state["created_workflow_id"] = str(new_id)
-                        st.success(
-                            "Workflow created successfully. Copy its ID into "
-                            "the sidebar to review or export the draft."
+                        st.session_state["created_workflow_project_id"] = str(
+                            project_id
                         )
-                    st.json(result)
+                    if result.get("status") == "completed":
+                        st.success(
+                            "Workflow completed. Human review is required."
+                        )
+                    else:
+                        st.error(
+                            f"Workflow status: {result.get('status', 'unknown')} "
+                            f"· Current stage: "
+                            f"{result.get('current_stage', 'unknown')}"
+                        )
+                        show_ollama_status(st)
+                        st.info(
+                            "A failed workflow cannot be changed to connected. "
+                            "Check the AI connection, then run a new workflow."
+                        )
+
+                    if new_id:
+                        st.caption("Workflow ID")
+                        st.code(str(new_id))
+                        st.button(
+                            "Use this workflow",
+                            key=f"use_workflow_{new_id}",
+                            on_click=select_created_workflow,
+                        )
+                        st.caption(
+                            "Selecting it fills the sidebar project and "
+                            "workflow IDs, avoiding lookup errors."
+                        )
+                    st.caption(result.get("message", ""))
                 except APIError as exc:
                     show_api_error(exc)
 
         if st.session_state.get("created_workflow_id"):
-            st.code(st.session_state["created_workflow_id"])
-            st.caption("Copy this workflow UUID into the sidebar.")
+            st.caption("Latest workflow created in this session.")
+            st.button(
+                "Use latest workflow",
+                key="use_latest_workflow",
+                on_click=select_created_workflow,
+            )
+
+elif page == "Summary & Submit":
+    st.subheader("Summary and Team Lead submission")
+
+    if not project_id or not workflow_id:
+        st.info("Enter the project ID and workflow UUID in the sidebar.")
+    else:
+        try:
+            workflow = get_workflow(project_id, workflow_id, access_token) or {}
+        except APIError as exc:
+            show_api_error(exc)
+        else:
+            workflow_status = workflow.get("status", "unknown")
+            review_status = workflow.get(
+                "review_status",
+                "pending_human_review" if workflow_status == "completed" else None,
+            )
+            st.caption(
+                f"Workflow: {workflow_status} · "
+                f"Review status: {review_status or 'not ready'}"
+            )
+
+            result = workflow.get("result") or {}
+            draft = result.get("draft") or {}
+            if draft:
+                st.markdown(f"### {draft.get('title', 'Literature summary')}")
+                st.markdown(draft.get("executive_summary", ""))
+                if draft.get("key_findings"):
+                    st.markdown("#### Key findings")
+                    st.json(draft["key_findings"])
+                if draft.get("conclusion"):
+                    st.markdown("#### Conclusion")
+                    st.write(draft["conclusion"])
+                st.warning(
+                    "This summary is a draft. Human review is required before use."
+                )
+            elif workflow_status != "completed":
+                st.error(
+                    workflow.get("error_message")
+                    or "The workflow has not produced a summary."
+                )
+
+            if workflow_status == "completed":
+                if workflow.get("current_stage") == "submitted_to_team_lead":
+                    st.success("Submitted to the Team Lead review queue.")
+                elif review_status == "approved":
+                    st.success("Approved by the Team Lead.")
+                    st.info(
+                        "Use the PDF Download or Word Download navigation "
+                        "option to export the approved summary."
+                    )
+                elif st.button("Submit to Team Lead", type="primary"):
+                    try:
+                        submitted = submit_for_review(
+                            project_id,
+                            workflow_id,
+                            access_token,
+                        )
+                        message = (
+                            submitted.get("message")
+                            if isinstance(submitted, dict)
+                            else None
+                        )
+                        st.success(message or "Submitted to the Team Lead.")
+                        st.rerun()
+                    except APIError as exc:
+                        show_api_error(exc)
+
+elif page == "Team Lead Queue":
+    st.subheader("Team Lead review queue")
+    try:
+        queue_data = get_review_queue(access_token)
+    except APIError as exc:
+        show_api_error(exc)
+    else:
+        items = queue_data.get("items", [])
+        if not items:
+            st.info("There are no summaries waiting for Team Lead review.")
+        else:
+            for item in items:
+                with st.container(border=True):
+                    st.markdown(
+                        f"**{item['project_name']}** · "
+                        f"Project {item['project_id']}"
+                    )
+                    st.write(item["research_question"])
+                    st.caption(
+                        f"Submitted: {item['submitted_at']} · "
+                        f"Status: {item['review_status']}"
+                    )
+                    st.code(item["workflow_id"])
+                    st.button(
+                        "Open this review",
+                        key=f"open_review_{item['workflow_id']}",
+                        on_click=select_queue_workflow,
+                        args=(item,),
+                    )
+            st.caption(
+                "Use the workflow UUID above in the sidebar, then open "
+                "Review & Export to approve or request changes."
+            )
+
+elif page == "PDF Download":
+    render_download_page("pdf")
+
+elif page == "Word Download":
+    render_download_page("docx")
 
 elif page == "Review & Export":
     st.subheader("Review and export")
@@ -427,40 +718,3 @@ elif page == "Review & Export":
                         st.json(result)
                     except APIError as exc:
                         show_api_error(exc)
-
-        st.divider()
-        st.markdown("### Export the latest saved revision")
-
-        export_cols = st.columns(2)
-        for column, fmt, label, mime_type in [
-            (export_cols[0], "pdf", "Download PDF", "application/pdf"),
-            (
-                export_cols[1],
-                "docx",
-                "Download Word",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            ),
-        ]:
-            with column:
-                if st.button(label, key=f"prepare_{fmt}"):
-                    try:
-                        response = download_export(
-                            project_id,
-                            workflow_id,
-                            fmt,
-                            access_token,
-                        )
-                        response.raise_for_status()
-                        st.session_state[f"export_{fmt}"] = response.content
-                    except Exception:
-                        st.error(f"Could not prepare {fmt.upper()} export.")
-
-                data = st.session_state.get(f"export_{fmt}")
-                if data:
-                    st.download_button(
-                        f"Save {fmt.upper()}",
-                        data=data,
-                        file_name=f"pharmawrite_review.{fmt}",
-                        mime=mime_type,
-                        key=f"save_{fmt}",
-                    )

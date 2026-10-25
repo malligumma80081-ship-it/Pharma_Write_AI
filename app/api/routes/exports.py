@@ -30,7 +30,7 @@ def download_draft(
     workflow_id: UUID,
     format: str = Query(pattern="^(pdf|docx)$"),
     db: Session = Depends(get_db),
-    reviewer: User = Depends(require_roles("reviewer", "admin")),
+    reviewer: User = Depends(require_roles("writer", "reviewer", "admin")),
 ):
     try:
         revision = get_current_revision(
@@ -40,6 +40,12 @@ def download_draft(
         )
     except ReviewError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if revision.status != "approved":
+        raise HTTPException(
+            status_code=409,
+            detail="PDF and Word downloads are available after Team Lead approval.",
+        )
 
     snapshot = revision.content_json
 

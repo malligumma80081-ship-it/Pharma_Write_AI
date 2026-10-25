@@ -103,3 +103,44 @@ def test_workflow_openapi_uses_integer_project_ids():
             if parameter["name"] == "project_id"
         )
         assert project_id["schema"]["type"] == "integer"
+
+
+def test_workflow_response_explains_ollama_timeout(client, monkeypatch):
+    project_response = client.post(
+        "/api/v1/projects/",
+        json={
+            "name": "Timeout project",
+            "research_question": "Does the workflow report model timeouts clearly?",
+        },
+    )
+    assert project_response.status_code == 201
+    project_id = project_response.json()["id"]
+
+    def fail_due_to_timeout(db, workflow, document_ids, top_k):
+        workflow.status = "failed"
+        workflow.current_stage = "failed"
+        workflow.error_message = (
+            "Ollama generation timed out after 900 seconds."
+        )
+        db.add(workflow)
+        db.commit()
+
+    monkeypatch.setattr(
+        workflow_routes,
+        "run_literature_workflow",
+        fail_due_to_timeout,
+    )
+
+    response = client.post(
+        f"/api/v1/projects/{project_id}/workflows",
+        json={
+            "research_question": "Does the workflow report model timeouts clearly?",
+            "document_ids": [str(uuid.uuid4())],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["message"] == (
+        "Ollama generation timed out after 900 seconds."
+    )
