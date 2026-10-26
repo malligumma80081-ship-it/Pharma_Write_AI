@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -5,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.dependencies.auth import get_current_user
-from app.db.models import Base, Project
+from app.db.models import Base, Project, User
 from app.db.session import get_db
 from app.main import app
 
@@ -122,3 +124,53 @@ def test_authenticated_user_owns_created_project(client):
     with test_session() as db:
         project = db.get(Project, created.json()["id"])
         assert str(project.owner_id) == registered.json()["id"]
+
+
+def test_writer_project_list_only_returns_owned_projects(
+    client,
+    authenticated_test_user,
+):
+    client, test_session = client
+    own_response = client.post(
+        "/api/v1/projects/",
+        json={
+            "name": "My visible project",
+            "research_question": "Is this project listed for its owner?",
+        },
+    )
+    assert own_response.status_code == 201
+
+    other_user = User(
+        id=uuid4(),
+        email="another-writer@example.test",
+        hashed_password="not-used-in-tests",
+        role="writer",
+        is_active=True,
+    )
+    with test_session() as db:
+        db.add(other_user)
+        db.flush()
+        db.add(
+            Project(
+                name="Another writer project",
+                research_question="Should another writer see this project?",
+                owner_id=other_user.id,
+            )
+        )
+        db.commit()
+
+    response = client.get("/api/v1/projects/")
+
+    assert response.status_code == 200
+    assert [project["id"] for project in response.json()] == [
+        own_response.json()["id"]
+    ]
+
+
+def test_project_list_requires_authentication(client):
+    client, _ = client
+    app.dependency_overrides.pop(get_current_user, None)
+
+    response = client.get("/api/v1/projects/")
+
+    assert response.status_code == 401

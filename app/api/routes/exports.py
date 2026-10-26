@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from io import BytesIO
 
 from app.api.dependencies.auth import require_roles
-from app.db.models import User
+from app.db.models import Project, User
 from app.db.session import get_db
 from app.services.review_service import (
     ReviewError,
@@ -26,12 +26,22 @@ def safe_filename(title: str) -> str:
 
 @router.get("/{project_id}/workflows/{workflow_id}/export")
 def download_draft(
-    project_id: str,
+    project_id: int,
     workflow_id: UUID,
     format: str = Query(pattern="^(pdf|docx)$"),
     db: Session = Depends(get_db),
     reviewer: User = Depends(require_roles("writer", "reviewer", "admin")),
 ):
+    project = db.get(Project, project_id)
+    if (
+        project is None
+        or (
+            reviewer.role == "writer"
+            and project.owner_id != reviewer.id
+        )
+    ):
+        raise HTTPException(status_code=404, detail="Workflow not found.")
+
     try:
         revision = get_current_revision(
             db=db,

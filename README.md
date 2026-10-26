@@ -1,11 +1,9 @@
 # PharmaWrite AI
 
-Prototype for human-reviewed scientific evidence summaries.
-
-The existing project, summary, and health endpoints are retained. The
-other route and service modules are scaffolds for the next implementation
-steps; they do not yet provide authentication, PDF processing, retrieval,
-citation verification, or document review workflows.
+Prototype for human-reviewed, evidence-grounded scientific summaries.
+The application includes authentication, PDF processing, persistent
+knowledge-base indexing, document retrieval, citation checks, and Team Lead
+review workflows.
 
 ## Local setup
 
@@ -62,7 +60,9 @@ The API docs are available at <http://127.0.0.1:8000/docs>.
 Ollama must be running separately with the configured model installed.
 
 Use the UI's **Create account** tab to register, then sign in. New accounts
-receive the `writer` role and can upload documents and generate drafts.
+receive the `writer` role. Create a project from **Projects** before uploading
+documents and generating drafts; the sidebar lists only projects the signed-in
+writer owns. Admins and Team Leads can view projects across accounts.
 Writers can view a completed summary and submit it to the Team Lead queue.
 PDF and Word downloads are enabled only after approval. `reviewer` accounts
 have a Team Lead Queue and can review submitted summaries; admins can use all
@@ -70,6 +70,16 @@ UI pages. Elevated roles are assigned by an administrator, not selected
 during registration. Run `python scripts/create_admin.py` to create the
 initial administrator. API clients must send the login token as a bearer
 token.
+
+Uploaded PDFs are text-extracted and indexed into the project's persistent
+Chroma knowledge base immediately. The index is stored under `data/chroma`
+by default (configurable with `CHROMA_PATH`). In the **Knowledge Base** page,
+ask questions across all indexed project PDFs or select specific documents.
+Answers include source filenames and page numbers; if the retrieved passages
+do not support an answer, the assistant abstains. Important claims should
+still be checked against the cited pages: retrieval and model-generated
+answers cannot guarantee scientific accuracy, and scanned/image-only PDFs
+may require OCR before their contents can be searched.
 
 ## Docker
 

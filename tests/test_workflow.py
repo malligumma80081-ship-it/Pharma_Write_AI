@@ -1,4 +1,5 @@
 import uuid
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -6,8 +7,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api.dependencies.auth import get_current_user
 from app.api.routes import workflow as workflow_routes
-from app.db.models import Base
+from app.db.models import Base, User
 from app.db.session import get_db
 from app.main import app
 from app.services.workflow_service import make_chunks
@@ -144,3 +146,39 @@ def test_workflow_response_explains_ollama_timeout(client, monkeypatch):
     assert response.json()["message"] == (
         "Ollama generation timed out after 900 seconds."
     )
+
+
+def test_writer_cannot_create_workflow_in_another_users_project(
+    client,
+    authenticated_test_user,
+):
+    foreign_user = User(
+        id=uuid4(),
+        email="different-writer@example.test",
+        hashed_password="not-used-in-tests",
+        role="writer",
+        is_active=True,
+    )
+    app.dependency_overrides[get_current_user] = lambda: foreign_user
+    foreign_project = client.post(
+        "/api/v1/projects/",
+        json={
+            "name": "Private project",
+            "research_question": "Can project ownership prevent mismatched workflows?",
+        },
+    )
+    assert foreign_project.status_code == 201
+    app.dependency_overrides[get_current_user] = (
+        lambda: authenticated_test_user
+    )
+
+    response = client.post(
+        f"/api/v1/projects/{foreign_project.json()['id']}/workflows",
+        json={
+            "research_question": "Can a writer access another writer project?",
+            "document_ids": [str(uuid.uuid4())],
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found"

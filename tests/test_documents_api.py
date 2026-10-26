@@ -9,6 +9,8 @@ from sqlalchemy.pool import StaticPool
 from app.db.models import Base
 from app.db.session import get_db
 from app.main import app
+from app.api.routes import documents as documents_route
+from app.api.routes import retrieval as retrieval_route
 
 
 @pytest.fixture
@@ -32,7 +34,13 @@ def client():
     engine.dispose()
 
 
-def test_document_endpoints_use_integer_project_ids(client):
+def test_document_endpoints_use_integer_project_ids(client, monkeypatch):
+    indexed_documents = []
+    monkeypatch.setattr(
+        documents_route,
+        "index_document_text",
+        lambda **kwargs: indexed_documents.append(kwargs) or 2,
+    )
     project_response = client.post(
         "/api/v1/projects/",
         json={
@@ -59,11 +67,45 @@ def test_document_endpoints_use_integer_project_ids(client):
     )
     assert upload_response.status_code == 201
     assert upload_response.json()["project_id"] == project_id
+    assert upload_response.json()["status"] == "indexed"
+    assert upload_response.json()["indexed_chunks"] == 2
+    assert len(indexed_documents) == 1
 
     list_response = client.get(f"/api/v1/projects/{project_id}/documents")
     assert list_response.status_code == 200
     assert len(list_response.json()) == 1
     assert list_response.json()[0]["filename"] == "sample.pdf"
+    assert list_response.json()[0]["status"] == "indexed"
+
+    monkeypatch.setattr(
+        retrieval_route,
+        "answer_knowledge_question",
+        lambda **kwargs: (
+            "The sample includes enough readable text.",
+            [
+                {
+                    "evidence_id": "E1",
+                    "document_id": upload_response.json()["id"],
+                    "filename": "sample.pdf",
+                    "page_start": 1,
+                    "page_end": 1,
+                    "quote": "Sample source passage.",
+                }
+            ],
+        ),
+    )
+    answer_response = client.post(
+        f"/api/v1/projects/{project_id}/knowledge-base/ask",
+        json={
+            "query": "What does the sample verify?",
+            "document_ids": [upload_response.json()["id"]],
+        },
+    )
+    assert answer_response.status_code == 200, answer_response.text
+    assert answer_response.json()["answer"] == (
+        "The sample includes enough readable text."
+    )
+    assert answer_response.json()["citations"][0]["filename"] == "sample.pdf"
 
 
 def test_document_endpoints_reject_non_integer_project_ids(client):
@@ -135,3 +177,13 @@ def test_retrieval_openapi_uses_integer_project_ids():
             if parameter["name"] == "project_id"
         )
         assert project_id["schema"]["type"] == "integer"
+
+    ask_operation = paths[
+        "/api/v1/projects/{project_id}/knowledge-base/ask"
+    ]["post"]
+    ask_project_id = next(
+        parameter
+        for parameter in ask_operation["parameters"]
+        if parameter["name"] == "project_id"
+    )
+    assert ask_project_id["schema"]["type"] == "integer"

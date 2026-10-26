@@ -2,6 +2,7 @@
 import pytest
 
 from app.schemas.writing import LiteratureDraft
+from app.services import rag_writer
 from app.services.rag_writer import (
     CitationValidationError,
     _validate_citations,
@@ -71,3 +72,63 @@ def test_duplicate_citations_are_removed(lookup):
 
     assert draft.key_findings[0].evidence_ids == ["E1"]
     assert len(citations) == 1
+
+
+def make_model_draft(evidence_ids):
+    return {
+        "title": "Study summary",
+        "executive_summary": "A summary of the source study.",
+        "key_findings": [
+            {
+                "statement": "The study reported a measured outcome.",
+                "evidence_ids": evidence_ids,
+            }
+        ],
+        "limitations": [],
+        "evidence_gaps": [],
+        "conclusion": "Review the cited evidence.",
+    }
+
+
+def test_invalid_generated_citation_retries_then_omits_unsupported_finding(
+    monkeypatch,
+):
+    prompts = []
+    responses = [
+        make_model_draft(["E99"]),
+        make_model_draft(["E99"]),
+    ]
+    monkeypatch.setattr(
+        rag_writer,
+        "retrieve_evidence",
+        lambda **kwargs: [
+            {
+                "chunk_id": "chunk-1",
+                "document_id": "doc-1",
+                "filename": "study.pdf",
+                "page_start": 1,
+                "page_end": 1,
+                "text": "Source passage.",
+            }
+        ],
+    )
+
+    def generate_json(**kwargs):
+        prompts.append(kwargs["user_prompt"])
+        return responses.pop(0)
+
+    monkeypatch.setattr(rag_writer, "generate_json", generate_json)
+
+    result = rag_writer.generate_literature_draft(
+        project_id="7",
+        research_question="What outcome did the study report?",
+    )
+
+    assert len(prompts) == 2
+    assert "only valid IDs are: E1" in prompts[1]
+    assert result.key_findings == []
+    assert result.citations == []
+    assert any(
+        "invalid evidence IDs were omitted" in warning
+        for warning in result.warnings
+    )

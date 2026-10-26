@@ -43,6 +43,33 @@ def get_ollama_status() -> dict:
     return response
 
 
+def list_projects(token: str, limit: int = 100, offset: int = 0):
+    return request_json(
+        "GET",
+        "/api/v1/projects/",
+        token=token,
+        params={"limit": limit, "offset": offset},
+    )
+
+
+def create_project(
+    name: str,
+    research_question: str,
+    token: str,
+    description: str | None = None,
+):
+    return request_json(
+        "POST",
+        "/api/v1/projects/",
+        token=token,
+        json={
+            "name": name,
+            "research_question": research_question,
+            "description": description,
+        },
+    )
+
+
 def request_json(method, path, **kwargs):
     url = f"{API_BASE_URL}{path}"
     token = kwargs.pop("token", None)
@@ -94,7 +121,44 @@ def upload_pdf(project_id: str, uploaded_file, token: str):
                 "application/pdf",
             )
         },
-        timeout=180,
+        timeout=900,
+    )
+
+
+def list_documents(project_id: str, token: str):
+    return request_json(
+        "GET",
+        f"/api/v1/projects/{project_id}/documents",
+        token=token,
+    )
+
+
+def index_document(project_id: str, document_id: str, token: str):
+    return request_json(
+        "POST",
+        f"/api/v1/projects/{project_id}/documents/{document_id}/index",
+        token=token,
+        timeout=300,
+    )
+
+
+def ask_knowledge_base(
+    project_id: str,
+    query: str,
+    document_ids: list[str],
+    token: str,
+    top_k: int = 6,
+):
+    return request_json(
+        "POST",
+        f"/api/v1/projects/{project_id}/knowledge-base/ask",
+        token=token,
+        json={
+            "query": query,
+            "document_ids": document_ids,
+            "top_k": top_k,
+        },
+        timeout=1900,
     )
 
 

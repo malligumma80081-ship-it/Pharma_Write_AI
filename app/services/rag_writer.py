@@ -252,10 +252,46 @@ Requirements:
 
     draft = LiteratureDraft.model_validate(raw)
 
-    citations, warnings = _validate_citations(
-        draft,
-        citation_lookup,
-    )
+    try:
+        citations, warnings = _validate_citations(
+            draft,
+            citation_lookup,
+        )
+    except CitationValidationError as first_error:
+        corrected = generate_json(
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=(
+                f"{user_prompt}\n\n"
+                "CORRECTION REQUIRED: The previous response used an "
+                f"unknown evidence ID ({first_error}). The only valid IDs "
+                f"are: {', '.join(citation_lookup)}. Return the complete "
+                "draft again and cite findings only with these IDs."
+            ),
+            output_schema=LiteratureDraft.model_json_schema(),
+        )
+        draft = LiteratureDraft.model_validate(corrected)
+        try:
+            citations, warnings = _validate_citations(
+                draft,
+                citation_lookup,
+            )
+        except CitationValidationError:
+            draft.key_findings = [
+                finding
+                for finding in draft.key_findings
+                if all(
+                    evidence_id in citation_lookup
+                    for evidence_id in finding.evidence_ids
+                )
+            ]
+            citations, warnings = _validate_citations(
+                draft,
+                citation_lookup,
+            )
+            warnings.append(
+                "Findings with invalid evidence IDs were omitted after "
+                "one correction attempt."
+            )
 
     if not draft.key_findings:
         warnings.append(

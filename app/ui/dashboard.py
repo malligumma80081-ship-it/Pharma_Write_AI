@@ -11,11 +11,16 @@ if __package__ in (None, ""):
 try:
     from .api_client import (  # type: ignore[import-not-found]
         APIError,
+        create_project,
         download_export,
         get_current_user,
         get_ollama_status,
         get_review,
         get_review_queue,
+        ask_knowledge_base,
+        index_document,
+        list_documents,
+        list_projects,
         get_workflow,
         login,
         register,
@@ -28,11 +33,16 @@ try:
 except ImportError:
     from api_client import (
         APIError,
+        create_project,
         download_export,
         get_current_user,
         get_ollama_status,
         get_review,
         get_review_queue,
+        ask_knowledge_base,
+        index_document,
+        list_documents,
+        list_projects,
         get_workflow,
         login,
         register,
@@ -58,9 +68,11 @@ def clear_auth_state():
         "access_token",
         "authenticated_user",
         "project_id",
+        "selected_project_id",
         "workflow_uuid",
-        "created_workflow_id",
-        "created_workflow_project_id",
+        "workflow_creation_result",
+        "pending_workflow_selection",
+        "knowledge_answer",
         "review_data",
         "export_pdf",
         "export_docx",
@@ -149,8 +161,10 @@ if not isinstance(current_user, dict):
 role = current_user.get("role")
 role_pages = {
     "writer": [
+        "Projects",
         "Overview",
         "Documents",
+        "Knowledge Base",
         "Generate Draft",
         "Summary & Submit",
         "PDF Download",
@@ -164,8 +178,10 @@ role_pages = {
         "Word Download",
     ],
     "admin": [
+        "Projects",
         "Overview",
         "Documents",
+        "Knowledge Base",
         "Generate Draft",
         "Summary & Submit",
         "Team Lead Queue",
@@ -214,15 +230,78 @@ if st.sidebar.button("Check AI connection"):
     except APIError as exc:
         st.sidebar.error(f"Could not check AI service: {exc}")
 
-project_id = st.sidebar.text_input(
-    "Project ID (integer)",
+pending_selection = st.session_state.pop(
+    "pending_workflow_selection",
+    None,
+)
+if isinstance(pending_selection, dict):
+    st.session_state["project_id"] = pending_selection["project_id"]
+    st.session_state["workflow_uuid"] = pending_selection["workflow_id"]
+
+pending_project_id = st.session_state.pop("pending_project_selection", None)
+if pending_project_id:
+    st.session_state["project_id"] = str(pending_project_id)
+    st.session_state["workflow_uuid"] = ""
+
+try:
+    projects = list_projects(access_token)
+except APIError as exc:
+    st.sidebar.error(f"Could not load projects: {exc}")
+    projects = []
+
+if not isinstance(projects, list):
+    st.sidebar.error("The API returned an invalid project list.")
+    projects = []
+
+project_labels = {
+    str(project["id"]): f"{project['name']} · ID {project['id']}"
+    for project in projects
+}
+project_options = list(project_labels)
+requested_project_id = st.session_state.get("project_id", "")
+if requested_project_id not in project_options:
+    st.session_state["project_id"] = (
+        project_options[0] if project_options else ""
+    )
+    st.session_state["workflow_uuid"] = ""
+    st.session_state.pop("review_data", None)
+    st.session_state.pop("approved_export_pdf", None)
+    st.session_state.pop("approved_export_docx", None)
+
+previous_project_id = st.session_state.get("selected_project_id")
+project_id = st.sidebar.selectbox(
+    "Project",
+    options=["", *project_options],
+    format_func=lambda value: (
+        "Select a project" if not value else project_labels[value]
+    ),
     key="project_id",
-).strip()
+)
+if (
+    previous_project_id is not None
+    and project_id != previous_project_id
+    and not isinstance(pending_selection, dict)
+):
+    st.session_state["workflow_uuid"] = ""
+    st.session_state.pop("review_data", None)
+    st.session_state.pop("approved_export_pdf", None)
+    st.session_state.pop("approved_export_docx", None)
+st.session_state["selected_project_id"] = project_id
+
 workflow_id = st.sidebar.text_input("Workflow UUID", key="workflow_uuid").strip()
 
 
 def show_api_error(exc: APIError):
-    st.error(str(exc))
+    message = str(exc)
+    if "workflow not found" in message.lower():
+        st.error(
+            "Workflow not found for this project. Select the project that "
+            "owns the workflow and use its exact workflow UUID. Writers can "
+            "only open workflows in their own projects; contact an "
+            "administrator if this project should belong to your account."
+        )
+    else:
+        st.error(message)
 
 
 def show_ollama_status(container):
@@ -246,18 +325,11 @@ def show_ollama_status(container):
 
 
 def select_queue_workflow(item):
-    st.session_state["project_id"] = str(item["project_id"])
-    st.session_state["workflow_uuid"] = item["workflow_id"]
+    st.session_state["pending_workflow_selection"] = {
+        "project_id": str(item["project_id"]),
+        "workflow_id": item["workflow_id"],
+    }
     st.session_state["navigation"] = "Review & Export"
-
-
-def select_created_workflow():
-    st.session_state["project_id"] = st.session_state[
-        "created_workflow_project_id"
-    ]
-    st.session_state["workflow_uuid"] = st.session_state[
-        "created_workflow_id"
-    ]
 
 
 def render_download_page(file_format: str):
@@ -321,11 +393,67 @@ def render_download_page(file_format: str):
         )
 
 
-if page == "Overview":
+if page == "Projects":
+    st.subheader("Your projects")
+    if projects:
+        st.dataframe(
+            [
+                {
+                    "Project ID": project["id"],
+                    "Name": project["name"],
+                    "Research question": project["research_question"],
+                    "Status": project["status"],
+                }
+                for project in projects
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+    else:
+        st.info("No projects are available. Create a project to get started.")
+
+    if role in ("writer", "admin"):
+        st.markdown("### Create a project")
+        with st.form("create_project_form"):
+            project_name = st.text_input(
+                "Project name",
+                max_chars=200,
+            )
+            project_question = st.text_area(
+                "Research question",
+                max_chars=3000,
+                help="Use at least 10 characters.",
+            )
+            create_project_submitted = st.form_submit_button(
+                "Create project",
+                type="primary",
+            )
+        if create_project_submitted:
+            try:
+                created = create_project(
+                    project_name.strip(),
+                    project_question.strip(),
+                    access_token,
+                )
+                if not isinstance(created, dict) or "id" not in created:
+                    st.error("The API returned an invalid project response.")
+                else:
+                    st.session_state["pending_project_selection"] = str(
+                        created["id"]
+                    )
+                    st.success(
+                        f"Project created: {created['name']} "
+                        f"(ID {created['id']})."
+                    )
+                    st.rerun()
+            except APIError as exc:
+                show_api_error(exc)
+
+elif page == "Overview":
     st.subheader("Project overview")
 
     if not project_id:
-        st.info("Enter an existing project ID in the sidebar to get started.")
+        st.info("Select a project in the sidebar or create one in Projects.")
     else:
         col1, col2 = st.columns(2)
         with col1:
@@ -353,7 +481,7 @@ elif page == "Documents":
     st.subheader("Document management")
 
     if not project_id:
-        st.warning("Enter a project ID in the sidebar before uploading files.")
+        st.warning("Select a project in the sidebar before uploading files.")
     else:
         uploaded_files = st.file_uploader(
             "Upload scientific PDF documents",
@@ -372,20 +500,169 @@ elif page == "Documents":
                             uploaded_file,
                             access_token,
                         )
-                        st.success(f"Uploaded: {uploaded_file.name}")
-                        st.json(result)
+                        if not isinstance(result, dict):
+                            st.error(
+                                f"{uploaded_file.name}: the API returned an "
+                                "invalid upload response."
+                            )
+                            continue
+                        st.success(
+                            f"Uploaded and indexed: {uploaded_file.name} "
+                            f"({result['indexed_chunks']} passages)."
+                        )
+                        st.code(result["id"])
                     except APIError as exc:
                         st.error(f"{uploaded_file.name}: {exc}")
 
-        st.caption(
-            "After upload, use the returned document IDs when you create a workflow."
-        )
+        try:
+            documents = list_documents(project_id, access_token)
+        except APIError as exc:
+            show_api_error(exc)
+        else:
+            if not isinstance(documents, list):
+                st.error("The API returned an invalid document list.")
+                documents = []
+            if documents:
+                st.markdown("### Project documents")
+                for document in documents:
+                    cols = st.columns([4, 2, 1])
+                    cols[0].write(document["filename"])
+                    cols[1].write(document["status"])
+                    if document["status"] != "indexed" and cols[2].button(
+                        "Index",
+                        key=f"index_{document['id']}",
+                    ):
+                        try:
+                            indexed = index_document(
+                                project_id,
+                                document["id"],
+                                access_token,
+                            )
+                            if not isinstance(indexed, dict):
+                                st.error(
+                                    "The API returned an invalid indexing "
+                                    "response."
+                                )
+                                continue
+                            st.success(f"{indexed['filename']} is indexed.")
+                            st.rerun()
+                        except APIError as exc:
+                            show_api_error(exc)
+
+elif page == "Knowledge Base":
+    st.subheader("Ask your project knowledge base")
+    st.caption(
+        "Answers use only indexed PDFs and include source-page citations. "
+        "If the documents do not support an answer, the assistant will say so."
+    )
+
+    if not project_id:
+        st.warning("Select a project in the sidebar.")
+    else:
+        try:
+            documents = list_documents(project_id, access_token)
+        except APIError as exc:
+            show_api_error(exc)
+        else:
+            if not isinstance(documents, list):
+                st.error("The API returned an invalid document list.")
+                documents = []
+            indexed_documents = [
+                document
+                for document in documents
+                if document["status"] == "indexed"
+            ]
+            if not indexed_documents:
+                st.info(
+                    "Upload a PDF from Documents first. It will be added to "
+                    "this project's searchable knowledge base."
+                )
+            else:
+                documents_by_id = {
+                    document["id"]: document
+                    for document in indexed_documents
+                }
+                selected_ids = st.multiselect(
+                    "Search these indexed documents",
+                    options=list(documents_by_id),
+                    default=list(documents_by_id),
+                    format_func=lambda document_id: (
+                        f"{documents_by_id[document_id]['filename']} "
+                        f"({document_id[:8]})"
+                    ),
+                )
+                question = st.text_area(
+                    "Your question",
+                    key="knowledge_question_input",
+                    placeholder="Ask about the content of your uploaded PDFs.",
+                    height=100,
+                )
+                top_k = st.slider(
+                    "Passages to use",
+                    min_value=1,
+                    max_value=12,
+                    value=6,
+                    key="knowledge_top_k",
+                )
+                if st.button("Ask knowledge base", type="primary"):
+                    if len(question.strip()) < 3:
+                        st.warning(
+                            "Enter a question with at least 3 characters."
+                        )
+                    elif not selected_ids:
+                        st.warning("Select at least one indexed document.")
+                    else:
+                        try:
+                            with st.spinner(
+                                "Searching documents and preparing an answer..."
+                            ):
+                                st.session_state.pop("knowledge_answer", None)
+                                st.session_state["knowledge_answer"] = (
+                                    ask_knowledge_base(
+                                        project_id,
+                                        question.strip(),
+                                        selected_ids,
+                                        access_token,
+                                        top_k,
+                                    )
+                                )
+                        except APIError as exc:
+                            show_api_error(exc)
+
+                answer_result = st.session_state.get("knowledge_answer")
+                if (
+                    isinstance(answer_result, dict)
+                    and answer_result.get("project_id") == project_id
+                ):
+                    st.markdown("### Answer")
+                    st.write(answer_result["answer"])
+                    if answer_result["citations"]:
+                        st.markdown("### Sources")
+                        for citation in answer_result["citations"]:
+                            pages = (
+                                str(citation["page_start"])
+                                if citation["page_start"]
+                                == citation["page_end"]
+                                else (
+                                    f"{citation['page_start']}-"
+                                    f"{citation['page_end']}"
+                                )
+                            )
+                            with st.expander(
+                                f"{citation['evidence_id']} · "
+                                f"{citation['filename']} · page {pages}"
+                            ):
+                                st.write(citation["quote"])
+                    st.caption(
+                        "AI-generated answer; verify important claims "
+                        "against the cited source pages."
+                    )
 
 elif page == "Generate Draft":
     st.subheader("Generate an evidence-grounded draft")
 
     if not project_id:
-        st.warning("Enter a project ID in the sidebar before creating a workflow.")
+        st.warning("Select a project in the sidebar before creating a workflow.")
     else:
         question = st.text_area(
             "Research question",
@@ -432,49 +709,38 @@ elif page == "Generate Draft":
 
                     new_id = result.get("workflow_id") or result.get("id")
                     if new_id:
-                        st.session_state["created_workflow_id"] = str(new_id)
-                        st.session_state["created_workflow_project_id"] = str(
-                            project_id
-                        )
-                    if result.get("status") == "completed":
-                        st.success(
-                            "Workflow completed. Human review is required."
-                        )
-                    else:
-                        st.error(
-                            f"Workflow status: {result.get('status', 'unknown')} "
-                            f"· Current stage: "
-                            f"{result.get('current_stage', 'unknown')}"
-                        )
-                        show_ollama_status(st)
-                        st.info(
-                            "A failed workflow cannot be changed to connected. "
-                            "Check the AI connection, then run a new workflow."
-                        )
-
-                    if new_id:
-                        st.caption("Workflow ID")
-                        st.code(str(new_id))
-                        st.button(
-                            "Use this workflow",
-                            key=f"use_workflow_{new_id}",
-                            on_click=select_created_workflow,
-                        )
-                        st.caption(
-                            "Selecting it fills the sidebar project and "
-                            "workflow IDs, avoiding lookup errors."
-                        )
-                    st.caption(result.get("message", ""))
+                        st.session_state["pending_workflow_selection"] = {
+                            "project_id": str(project_id),
+                            "workflow_id": str(new_id),
+                        }
+                    st.session_state["workflow_creation_result"] = result
+                    st.rerun()
                 except APIError as exc:
                     show_api_error(exc)
 
-        if st.session_state.get("created_workflow_id"):
-            st.caption("Latest workflow created in this session.")
-            st.button(
-                "Use latest workflow",
-                key="use_latest_workflow",
-                on_click=select_created_workflow,
+        workflow_result = st.session_state.pop(
+            "workflow_creation_result",
+            None,
+        )
+        if workflow_result:
+            workflow_id_created = (
+                workflow_result.get("workflow_id")
+                or workflow_result.get("id")
             )
+            if workflow_result.get("status") == "completed":
+                st.success(
+                    "Workflow completed. Human review is required."
+                )
+            else:
+                st.error(
+                    f"Workflow {workflow_result.get('status', 'unknown')} "
+                    f"at stage {workflow_result.get('current_stage', 'unknown')}. "
+                    f"{workflow_result.get('message', '')}"
+                )
+                show_ollama_status(st)
+            if workflow_id_created:
+                st.caption("The sidebar now points to this workflow.")
+                st.code(str(workflow_id_created))
 
 elif page == "Summary & Submit":
     st.subheader("Summary and Team Lead submission")
@@ -550,6 +816,9 @@ elif page == "Team Lead Queue":
     except APIError as exc:
         show_api_error(exc)
     else:
+        if not isinstance(queue_data, dict):
+            st.error("The API returned an invalid review queue.")
+            st.stop()
         items = queue_data.get("items", [])
         if not items:
             st.info("There are no summaries waiting for Team Lead review.")

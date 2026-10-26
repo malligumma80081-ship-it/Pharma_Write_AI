@@ -40,3 +40,25 @@ class SearchResponse(BaseModel):
     project_id: str
     result_count: int
     results: list[SearchResult]
+
+
+class KnowledgeQuestionRequest(BaseModel):
+    query: str = Field(min_length=3, max_length=2000)
+    top_k: int = Field(default=6, ge=1, le=12)
+    document_ids: list[str] | None = Field(default=None, max_length=50)
+
+
+class KnowledgeCitation(BaseModel):
+    evidence_id: str
+    document_id: str
+    filename: str
+    page_start: int
+    page_end: int
+    quote: str
+
+
+class KnowledgeAnswerResponse(BaseModel):
+    query: str
+    project_id: str
+    answer: str
+    citations: list[KnowledgeCitation]

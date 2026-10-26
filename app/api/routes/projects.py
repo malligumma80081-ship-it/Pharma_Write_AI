@@ -43,14 +43,17 @@ def list_projects(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    user: User = Depends(require_roles("writer", "reviewer", "admin")),
 ):
+    statement = select(Project)
+    if user.role == "writer":
+        statement = statement.where(Project.owner_id == user.id)
+
     statement = (
-        select(Project)
-        .order_by(Project.created_at.desc())
+        statement.order_by(Project.created_at.desc())
         .offset(offset)
         .limit(limit)
     )
-
     return list(db.scalars(statement).all())
 
 

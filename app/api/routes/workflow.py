@@ -45,6 +45,12 @@ def start_workflow(
             detail="Project not found",
         )
 
+    if user.role != "admin" and project.owner_id != user.id:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found",
+        )
+
     try:
         document_ids = list(dict.fromkeys(
             uuid.UUID(value) for value in request.document_ids

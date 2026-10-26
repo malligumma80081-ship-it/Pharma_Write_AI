@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
@@ -8,6 +10,7 @@ from app.services.pdf_parser import (
     PDFExtractionError,
     extract_pdf_text,
 )
+from app.services.document_indexer import index_document_text
 
 router = APIRouter(
     prefix="/api/v1/projects",
@@ -16,6 +19,7 @@ router = APIRouter(
 
 MAX_FILE_SIZE = 15 * 1024 * 1024  # 15 MB
 PDF_SIGNATURE = b"%PDF-"
+logger = logging.getLogger(__name__)
 
 
 @router.post("/{project_id}/documents", status_code=201)
@@ -23,7 +27,7 @@ async def upload_document(
     project_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("writer", "admin")),
+    _user: User = Depends(require_roles("writer", "admin")),
 ):
     project = db.get(Project, project_id)
 
@@ -79,6 +83,32 @@ async def upload_document(
         db.commit()
         db.refresh(document)
 
+        try:
+            chunk_count = index_document_text(
+                extracted_text=document.extracted_text,
+                document_id=str(document.id),
+                project_id=str(project.id),
+                filename=document.filename,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Knowledge-base indexing failed for document_id=%s",
+                document.id,
+            )
+            document.status = "indexing_failed"
+            db.commit()
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The PDF was saved, but knowledge-base indexing failed. "
+                    "Retry indexing from the Documents page."
+                ),
+            ) from exc
+
+        document.status = "indexed"
+        db.commit()
+        db.refresh(document)
+
         return {
             "id": str(document.id),
             "project_id": document.project_id,
@@ -86,7 +116,8 @@ async def upload_document(
             "page_count": document.page_count,
             "character_count": extracted["character_count"],
             "status": document.status,
-            "message": "PDF text extracted and saved successfully.",
+            "indexed_chunks": chunk_count,
+            "message": "PDF saved and added to the project knowledge base.",
         }
 
     except HTTPException:
@@ -104,7 +135,7 @@ async def upload_document(
 def list_documents(
     project_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("writer", "admin")),
+    _user: User = Depends(require_roles("writer", "admin")),
 ):
     project = db.get(Project, project_id)
 

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Document, LiteratureWorkflow
 from app.services.chunking import TextChunk
-from app.services.vector_store import index_chunks
+from app.services.document_indexer import index_document_text
 from app.services.evidence_extractor import (
     EvidenceCitationError,
     extract_study_evidence,
@@ -98,19 +98,16 @@ def run_literature_workflow(
                     f"No extracted text available for {document.filename}."
                 )
 
-            chunks = make_chunks(document.extracted_text)
-
-            if not chunks:
-                raise ValueError(
-                    f"No indexable text found in {document.filename}."
+            if document.status != "indexed":
+                index_document_text(
+                    extracted_text=document.extracted_text,
+                    document_id=str(document.id),
+                    project_id=str(workflow.project_id),
+                    filename=document.filename,
                 )
-
-            index_chunks(
-                chunks=chunks,
-                document_id=str(document.id),
-                project_id=str(workflow.project_id),
-                filename=document.filename,
-            )
+                document.status = "indexed"
+                db.add(document)
+                db.commit()
 
         selected_ids = [str(value) for value in document_ids]
 
