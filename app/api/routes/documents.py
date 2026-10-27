@@ -27,11 +27,15 @@ async def upload_document(
     project_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    _user: User = Depends(require_roles("writer", "admin")),
+    user: User = Depends(
+        require_roles("writer", "project_manager", "admin")
+    ),
 ):
     project = db.get(Project, project_id)
 
-    if project is None:
+    if project is None or (
+        user.role == "writer" and project.owner_id != user.id
+    ):
         raise HTTPException(status_code=404, detail="Project not found.")
 
     filename = (file.filename or "").replace("\\", "/").split("/")[-1]
@@ -135,11 +139,15 @@ async def upload_document(
 def list_documents(
     project_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(require_roles("writer", "admin")),
+    user: User = Depends(
+        require_roles("writer", "project_manager", "admin")
+    ),
 ):
     project = db.get(Project, project_id)
 
-    if project is None:
+    if project is None or (
+        user.role == "writer" and project.owner_id != user.id
+    ):
         raise HTTPException(status_code=404, detail="Project not found.")
 
     documents = (

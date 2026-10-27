@@ -5,7 +5,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.auth import require_roles
-from app.db.models import DraftRevision, Project, LiteratureWorkflow, User
+from app.db.models import (
+    DraftRevision,
+    LiteratureWorkflow,
+    Project,
+    User,
+    WorkflowAssignment,
+)
 from app.db.session import get_db
 from app.schemas.workflow import (
     WorkflowCreateRequest,
@@ -33,7 +39,9 @@ def start_workflow(
     project_id: int,
     request: WorkflowCreateRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("writer", "admin")),
+    user: User = Depends(
+        require_roles("writer", "project_manager", "admin")
+    ),
 ):
     project = db.query(Project).filter(
         Project.id == project_id
@@ -45,7 +53,9 @@ def start_workflow(
             detail="Project not found",
         )
 
-    if user.role != "admin" and project.owner_id != user.id:
+    if user.role not in ("admin", "project_manager") and (
+        project.owner_id != user.id
+    ):
         raise HTTPException(
             status_code=404,
             detail="Project not found",
@@ -108,7 +118,14 @@ def get_workflow_status(
     project_id: int,
     workflow_id: uuid.UUID,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("writer", "reviewer", "admin")),
+    user: User = Depends(
+        require_roles(
+            "writer",
+            "reviewer",
+            "project_manager",
+            "admin",
+        )
+    ),
 ):
     workflow = db.query(LiteratureWorkflow).filter(
         LiteratureWorkflow.id == workflow_id,
@@ -123,10 +140,9 @@ def get_workflow_status(
 
     project = db.get(Project, project_id)
     if (
-        user.role != "admin"
+        user.role not in ("admin", "reviewer", "project_manager")
         and project is not None
         and project.owner_id != user.id
-        and user.role != "reviewer"
     ):
         raise HTTPException(status_code=404, detail="Workflow not found")
 
@@ -167,7 +183,9 @@ def submit_workflow_for_review(
     project_id: int,
     workflow_id: uuid.UUID,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("writer", "admin")),
+    user: User = Depends(
+        require_roles("writer", "project_manager", "admin")
+    ),
 ):
     workflow = db.scalar(
         select(LiteratureWorkflow).where(
@@ -180,7 +198,7 @@ def submit_workflow_for_review(
 
     project = db.get(Project, project_id)
     if (
-        user.role != "admin"
+        user.role not in ("admin", "project_manager")
         and project is not None
         and project.owner_id != user.id
     ):
@@ -190,6 +208,17 @@ def submit_workflow_for_review(
         raise HTTPException(
             status_code=409,
             detail="Only completed summaries can be submitted for review.",
+        )
+
+    has_assignments = db.scalar(
+        select(WorkflowAssignment.id)
+        .where(WorkflowAssignment.workflow_id == workflow.id)
+        .limit(1)
+    )
+    if has_assignments is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="This workflow uses role assignments. Complete your assigned stage instead.",
         )
 
     if workflow.current_stage not in (

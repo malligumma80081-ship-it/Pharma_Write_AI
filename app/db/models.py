@@ -165,41 +165,89 @@ from app.db.session import Base
 class LiteratureWorkflow(Base):
     __tablename__ = "literature_workflows"
 
-    id = Column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
     )
-    project_id = Column(
+    project_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("projects.id"),
         nullable=False,
         index=True,
     )
-    research_question = Column(Text, nullable=False)
-    status = Column(
+    research_question: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
         String(40),
         nullable=False,
         default="queued",
     )
-    current_stage = Column(
+    current_stage: Mapped[str] = mapped_column(
         String(80),
         nullable=False,
         default="queued",
     )
-    result_json = Column(JSON, nullable=True)
-    error_message = Column(Text, nullable=True)
-    created_at = Column(
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
     ) 
+
+
+class WorkflowAssignment(Base):
+    __tablename__ = "workflow_assignments"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("literature_workflows.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    assigned_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+    assigned_by_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+    stage: Mapped[str] = mapped_column(String(40), nullable=False)
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="pending",
+    )
+    target_user_ids: Mapped[list[str]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+    )
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
 
 from sqlalchemy import (
     UniqueConstraint,
@@ -217,27 +265,27 @@ class DraftRevision(Base):
         ),
     )
 
-    id = Column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
     )
 
-    project_id = Column(
+    project_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("projects.id"),
         nullable=False,
         index=True,
     )
 
-    workflow_id = Column(
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("literature_workflows.id"),
         nullable=False,
         index=True,
     )
 
-    version_number = Column(Integer, nullable=False)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
 
     # Complete snapshot: draft content and associated citations.
     content_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
@@ -250,12 +298,15 @@ class DraftRevision(Base):
         index=True,
     )
 
-    reviewer_comment = Column(Text, nullable=True)
+    reviewer_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Set from the authenticated session once authentication is implemented.
-    reviewer_id = Column(String(100), nullable=True)
+    reviewer_id: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
@@ -277,6 +328,9 @@ class User(Base):
     )
     role: Mapped[str] = mapped_column(
         String(30), default="writer", nullable=False
+    )
+    requested_role: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
     )
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False

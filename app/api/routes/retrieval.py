@@ -62,11 +62,15 @@ def index_document(
     project_id: int,
     document_id: DocumentId,
     db: Session = Depends(get_db),
-    _user: User = Depends(require_roles("writer", "admin")),
+    user: User = Depends(
+        require_roles("writer", "project_manager", "admin")
+    ),
 ):
     project = db.get(Project, project_id)
 
-    if project is None:
+    if project is None or (
+        user.role == "writer" and project.owner_id != user.id
+    ):
         raise HTTPException(
             status_code=404,
             detail="Project not found.",
@@ -119,11 +123,15 @@ def search_project_evidence(
     project_id: int,
     request: SearchRequest,
     db: Session = Depends(get_db),
-    _user: User = Depends(require_roles("writer", "admin")),
+    user: User = Depends(
+        require_roles("writer", "project_manager", "admin")
+    ),
 ):
     project = db.get(Project, project_id)
 
-    if project is None:
+    if project is None or (
+        user.role == "writer" and project.owner_id != user.id
+    ):
         raise HTTPException(
             status_code=404,
             detail="Project not found.",
@@ -201,10 +209,14 @@ def ask_knowledge_base(
     project_id: int,
     request: KnowledgeQuestionRequest,
     db: Session = Depends(get_db),
-    _user: User = Depends(require_roles("writer", "admin")),
+    user: User = Depends(
+        require_roles("writer", "project_manager", "admin")
+    ),
 ):
     project = db.get(Project, project_id)
-    if project is None:
+    if project is None or (
+        user.role == "writer" and project.owner_id != user.id
+    ):
         raise HTTPException(
             status_code=404,
             detail="Project not found.",

@@ -4,11 +4,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from io import BytesIO
 
 from app.api.dependencies.auth import require_roles
-from app.db.models import Project, User
+from app.db.models import LiteratureWorkflow, Project, User, WorkflowAssignment
 from app.db.session import get_db
 from app.services.review_service import (
     ReviewError,
@@ -30,7 +31,14 @@ def download_draft(
     workflow_id: UUID,
     format: str = Query(pattern="^(pdf|docx)$"),
     db: Session = Depends(get_db),
-    reviewer: User = Depends(require_roles("writer", "reviewer", "admin")),
+    reviewer: User = Depends(
+        require_roles(
+            "writer",
+            "reviewer",
+            "project_manager",
+            "admin",
+        )
+    ),
 ):
     project = db.get(Project, project_id)
     if (
@@ -54,7 +62,21 @@ def download_draft(
     if revision.status != "approved":
         raise HTTPException(
             status_code=409,
-            detail="PDF and Word downloads are available after Team Lead approval.",
+            detail="PDF and Word downloads are available after the required approval stage.",
+        )
+
+    workflow = db.get(LiteratureWorkflow, workflow_id)
+    has_assignments = db.scalar(
+        select(WorkflowAssignment.id)
+        .where(WorkflowAssignment.workflow_id == workflow_id)
+        .limit(1)
+    )
+    if has_assignments is not None and (
+        workflow is None or workflow.current_stage != "approved_by_admin"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="This workflow is available for export only after final administrator approval.",
         )
 
     snapshot = revision.content_json

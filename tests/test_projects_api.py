@@ -167,6 +167,60 @@ def test_writer_project_list_only_returns_owned_projects(
     ]
 
 
+def test_project_manager_can_manage_and_list_all_projects(client):
+    client, test_session = client
+    own_project = client.post(
+        "/api/v1/projects/",
+        json={
+            "name": "Manager-owned project",
+            "research_question": "Can managers create projects?",
+        },
+    )
+    assert own_project.status_code == 201
+
+    writer = User(
+        id=uuid4(),
+        email="manager-test-writer@example.com",
+        hashed_password="not-used-in-test",
+        role="writer",
+        is_active=True,
+    )
+    manager = User(
+        id=uuid4(),
+        email="project-manager@example.com",
+        hashed_password="not-used-in-test",
+        role="project_manager",
+        is_active=True,
+    )
+    with test_session() as db:
+        db.add_all([writer, manager])
+        db.flush()
+        other_project = Project(
+            name="Writer-owned project",
+            research_question="Can managers see projects owned by writers?",
+            owner_id=writer.id,
+        )
+        db.add(other_project)
+        db.commit()
+        other_project_id = other_project.id
+
+    app.dependency_overrides[get_current_user] = lambda: manager
+
+    response = client.get("/api/v1/projects/")
+    assert response.status_code == 200
+    assert {project["id"] for project in response.json()} == {
+        own_project.json()["id"],
+        other_project_id,
+    }
+
+    updated = client.patch(
+        f"/api/v1/projects/{other_project_id}",
+        json={"status": "in_progress"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["status"] == "in_progress"
+
+
 def test_project_list_requires_authentication(client):
     client, _ = client
     app.dependency_overrides.pop(get_current_user, None)

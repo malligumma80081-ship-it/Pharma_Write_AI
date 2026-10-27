@@ -24,16 +24,109 @@ def login(email: str, password: str) -> dict | None:
     )
 
 
-def register(email: str, password: str) -> dict | None:
+def register(
+    email: str,
+    password: str,
+    requested_role: str = "writer",
+) -> dict | None:
     return request_json(
         "POST",
         "/api/v1/auth/register",
-        json={"email": email, "password": password},
+        json={
+            "email": email,
+            "password": password,
+            "requested_role": requested_role,
+        },
     )
 
 
 def get_current_user(token: str) -> dict | None:
     return request_json("GET", "/api/v1/auth/me", token=token)
+
+
+def list_users(token: str) -> list:
+    return request_json("GET", "/api/v1/admin/users", token=token)
+
+
+def update_user_role(user_id: str, role: str, token: str) -> dict | None:
+    return request_json(
+        "PATCH",
+        f"/api/v1/admin/users/{user_id}/role",
+        token=token,
+        json={"role": role},
+    )
+
+
+def get_my_assignments(token: str) -> dict:
+    return request_json(
+        "GET",
+        "/api/v1/workflow-assignments/mine",
+        token=token,
+    )
+
+
+def get_unassigned_workflows(token: str) -> dict:
+    return request_json(
+        "GET",
+        "/api/v1/workflow-assignments/unassigned",
+        token=token,
+    )
+
+
+def get_eligible_users(workflow_id: str, token: str) -> dict:
+    return request_json(
+        "GET",
+        f"/api/v1/workflow-assignments/{workflow_id}/eligible-users",
+        token=token,
+    )
+
+
+def assign_workflow(
+    workflow_id: str,
+    user_ids: list[str],
+    token: str,
+) -> dict:
+    return request_json(
+        "POST",
+        f"/api/v1/workflow-assignments/{workflow_id}/assign",
+        token=token,
+        json={"user_ids": user_ids},
+    )
+
+
+def get_assigned_draft(workflow_id: str, token: str) -> dict:
+    return request_json(
+        "GET",
+        f"/api/v1/workflow-assignments/{workflow_id}/draft",
+        token=token,
+    )
+
+
+def save_assigned_draft(
+    workflow_id: str,
+    content: dict,
+    comment: str,
+    token: str,
+) -> dict:
+    return request_json(
+        "PUT",
+        f"/api/v1/workflow-assignments/{workflow_id}/draft",
+        token=token,
+        json={"content": content, "comment": comment},
+    )
+
+
+def complete_assignment(
+    workflow_id: str,
+    comment: str,
+    token: str,
+) -> dict:
+    return request_json(
+        "POST",
+        f"/api/v1/workflow-assignments/{workflow_id}/complete",
+        token=token,
+        json={"comment": comment},
+    )
 
 
 def get_ollama_status() -> dict:

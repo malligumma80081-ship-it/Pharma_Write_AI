@@ -184,6 +184,28 @@ def test_writer_cannot_access_review_endpoints(review_client):
     assert response.status_code == 403
 
 
+def test_project_manager_cannot_access_team_lead_review_endpoints(
+    review_client,
+):
+    client, project_id, workflow_id = review_client
+    manager = User(
+        id=uuid.uuid4(),
+        email="manager@example.com",
+        hashed_password="not-used-in-tests",
+        role="project_manager",
+        is_active=True,
+    )
+    app.dependency_overrides[get_current_user] = lambda: manager
+
+    queue = client.get("/api/v1/review-queue/")
+    review = client.get(
+        f"/api/v1/projects/{project_id}/workflows/{workflow_id}/review"
+    )
+
+    assert queue.status_code == 403
+    assert review.status_code == 403
+
+
 def test_writer_submits_pending_summary_to_team_lead_queue(review_client):
     client, project_id, workflow_id = review_client
     writer = User(

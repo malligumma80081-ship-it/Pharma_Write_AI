@@ -14,7 +14,12 @@ from app.schemas.review import (
     DraftReviewResponse,
     ReviewDecisionRequest,
 )
-from app.db.models import DraftRevision, LiteratureWorkflow, Project
+from app.db.models import (
+    DraftRevision,
+    LiteratureWorkflow,
+    Project,
+    WorkflowAssignment,
+)
 from app.services.review_service import (
     ReviewConflictError,
     ReviewError,
@@ -23,11 +28,17 @@ from app.services.review_service import (
     get_current_revision,
     list_revisions,
 )
+from app.services.workflow_assignments import (
+    AssignmentError,
+    record_review_decision,
+)
 
 router = APIRouter(
     prefix="/api/v1/projects",
     tags=["Draft Review"],
-    dependencies=[Depends(require_roles("reviewer", "admin"))],
+    dependencies=[
+        Depends(require_roles("reviewer", "project_manager", "admin"))
+    ],
 )
 review_queue_router = APIRouter(
     prefix="/api/v1/review-queue",
@@ -57,6 +68,50 @@ def handle_error(error):
     if isinstance(error, ReviewError):
         raise HTTPException(status_code=400, detail=str(error)) from error
     raise error
+
+
+def require_current_assignment(
+    db: Session,
+    workflow: LiteratureWorkflow,
+    user: User,
+) -> bool:
+    has_assignment_history = db.scalar(
+        select(WorkflowAssignment.id)
+        .where(WorkflowAssignment.workflow_id == workflow.id)
+        .limit(1)
+    )
+    if has_assignment_history is None:
+        if user.role == "project_manager":
+            raise HTTPException(
+                status_code=403,
+                detail="Project Managers may review only workflows assigned to them.",
+            )
+        return False
+
+    if workflow.current_stage not in (
+        "team_lead_review",
+        "project_manager_review",
+        "admin_review",
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="This workflow is at an assignment or writer stage, not a review stage.",
+        )
+
+    assigned = db.scalar(
+        select(WorkflowAssignment.id).where(
+            WorkflowAssignment.workflow_id == workflow.id,
+            WorkflowAssignment.stage == workflow.current_stage,
+            WorkflowAssignment.assigned_user_id == user.id,
+            WorkflowAssignment.status == "pending",
+        )
+    )
+    if assigned is None:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not assigned to the active workflow stage.",
+        )
+    return True
 
 
 @review_queue_router.get("/")
@@ -111,8 +166,18 @@ def read_review(
     project_id: int,
     workflow_id: UUID,
     db: Session = Depends(get_db),
+    reviewer: User = Depends(get_current_user),
 ):
     try:
+        workflow = db.scalar(
+            select(LiteratureWorkflow).where(
+                LiteratureWorkflow.id == workflow_id,
+                LiteratureWorkflow.project_id == project_id,
+            )
+        )
+        if workflow is None:
+            raise HTTPException(status_code=404, detail="Workflow not found.")
+        require_current_assignment(db, workflow, reviewer)
         revision = get_current_revision(db, project_id, workflow_id)
         return {
             "current_revision": serialize_revision(revision),
@@ -131,8 +196,18 @@ def edit_draft(
     workflow_id: UUID,
     request: DraftEditRequest,
     db: Session = Depends(get_db),
+    reviewer: User = Depends(get_current_user),
 ):
     try:
+        workflow = db.scalar(
+            select(LiteratureWorkflow).where(
+                LiteratureWorkflow.id == workflow_id,
+                LiteratureWorkflow.project_id == project_id,
+            )
+        )
+        if workflow is None:
+            raise HTTPException(status_code=404, detail="Workflow not found.")
+        require_current_assignment(db, workflow, reviewer)
         current = get_current_revision(db, project_id, workflow_id)
 
         if current.status == "approved":
@@ -166,6 +241,46 @@ def record_decision(
     reviewer: User = Depends(get_current_user),
 ):
     try:
+        workflow = db.scalar(
+            select(LiteratureWorkflow).where(
+                LiteratureWorkflow.id == workflow_id,
+                LiteratureWorkflow.project_id == project_id,
+            )
+        )
+        if workflow is None:
+            raise HTTPException(status_code=404, detail="Workflow not found.")
+
+        has_assignment_history = require_current_assignment(
+            db,
+            workflow,
+            reviewer,
+        )
+        if has_assignment_history:
+            current = get_current_revision(db, project_id, workflow_id)
+            if current.status == "approved":
+                raise ReviewConflictError(
+                    "This version is already approved. Create a new revision first."
+                )
+            try:
+                record_review_decision(
+                    db,
+                    workflow,
+                    reviewer,
+                    (
+                        "approved"
+                        if request.decision == "approved"
+                        else "changes_requested"
+                    ),
+                    request.comment,
+                )
+            except AssignmentError as error:
+                raise HTTPException(
+                    status_code=409,
+                    detail=str(error),
+                ) from error
+            db.refresh(current)
+            return serialize_revision(current)
+
         current = get_current_revision(db, project_id, workflow_id)
 
         if current.status == "approved":
@@ -207,8 +322,18 @@ def read_revision_history(
     project_id: int,
     workflow_id: UUID,
     db: Session = Depends(get_db),
+    reviewer: User = Depends(get_current_user),
 ):
     try:
+        workflow = db.scalar(
+            select(LiteratureWorkflow).where(
+                LiteratureWorkflow.id == workflow_id,
+                LiteratureWorkflow.project_id == project_id,
+            )
+        )
+        if workflow is None:
+            raise HTTPException(status_code=404, detail="Workflow not found.")
+        require_current_assignment(db, workflow, reviewer)
         revisions = list_revisions(db, project_id, workflow_id)
         return {
             "workflow_id": str(workflow_id),

@@ -36,6 +36,11 @@ def register(
         email=email,
         hashed_password=hash_password(payload.password),
         role="writer",
+        requested_role=(
+            payload.requested_role
+            if payload.requested_role != "writer"
+            else None
+        ),
     )
     db.add(user)
     try:

@@ -11,14 +11,21 @@ if __package__ in (None, ""):
 try:
     from .api_client import (  # type: ignore[import-not-found]
         APIError,
+        assign_workflow,
+        complete_assignment,
         create_project,
         download_export,
+        get_assigned_draft,
+        get_eligible_users,
         get_current_user,
+        get_my_assignments,
         get_ollama_status,
         get_review,
         get_review_queue,
+        get_unassigned_workflows,
         ask_knowledge_base,
         index_document,
+        list_users,
         list_documents,
         list_projects,
         get_workflow,
@@ -26,21 +33,30 @@ try:
         register,
         record_decision,
         save_review,
+        save_assigned_draft,
         start_workflow,
         submit_for_review,
+        update_user_role,
         upload_pdf,
     )
 except ImportError:
     from api_client import (
         APIError,
+        assign_workflow,
+        complete_assignment,
         create_project,
         download_export,
+        get_assigned_draft,
+        get_eligible_users,
         get_current_user,
+        get_my_assignments,
         get_ollama_status,
         get_review,
         get_review_queue,
+        get_unassigned_workflows,
         ask_knowledge_base,
         index_document,
+        list_users,
         list_documents,
         list_projects,
         get_workflow,
@@ -48,8 +64,10 @@ except ImportError:
         register,
         record_decision,
         save_review,
+        save_assigned_draft,
         start_workflow,
         submit_for_review,
+        update_user_role,
         upload_pdf,
     )
 
@@ -107,11 +125,21 @@ if not st.session_state.get("access_token"):
                 st.error(f"Sign in failed: {exc}")
 
     with register_tab:
-        st.caption("New accounts are registered with the Writer role.")
+        st.caption(
+            "Registration always creates a Writer account. You may request "
+            "Team Leader or Project Manager access, but an administrator "
+            "must approve the request before your role changes. Admin "
+            "accounts can only be created by an existing administrator."
+        )
         with st.form("register_form"):
             register_email = st.text_input(
                 "Email address",
                 key="register_email",
+            )
+            requested_role_label = st.selectbox(
+                "Role to request",
+                ["Writer", "Team Leader", "Project Manager"],
+                key="register_requested_role",
             )
             register_password = st.text_input(
                 "Password (at least 12 characters)",
@@ -136,11 +164,27 @@ if not st.session_state.get("access_token"):
                     created_user = register(
                         register_email.strip(),
                         register_password,
+                        requested_role={
+                            "Writer": "writer",
+                            "Team Leader": "reviewer",
+                            "Project Manager": "project_manager",
+                        }[requested_role_label],
                     )
-                    st.success(
-                        f"Account created for {register_email.strip()}. "
-                        "Sign in to continue."
-                    )
+                    if (
+                        isinstance(created_user, dict)
+                        and created_user.get("requested_role")
+                    ):
+                        st.success(
+                            "Account created with Writer access. "
+                            f"Requested role: {requested_role_label}. "
+                            "An administrator must approve this request "
+                            "before your role changes."
+                        )
+                    else:
+                        st.success(
+                            "Account created with Writer access. "
+                            "Sign in to continue."
+                        )
                 except APIError as exc:
                     st.error(f"Could not create account: {exc}")
     st.stop()
@@ -159,8 +203,15 @@ if not isinstance(current_user, dict):
     st.stop()
 
 role = current_user.get("role")
+role_labels = {
+    "writer": "Writer",
+    "reviewer": "Team Leader",
+    "project_manager": "Project Manager",
+    "admin": "Administrator",
+}
 role_pages = {
     "writer": [
+        "My Assignments",
         "Projects",
         "Overview",
         "Documents",
@@ -171,14 +222,29 @@ role_pages = {
         "Word Download",
     ],
     "reviewer": [
+        "My Assignments",
         "Overview",
         "Team Lead Queue",
         "Review & Export",
         "PDF Download",
         "Word Download",
     ],
-    "admin": [
+    "project_manager": [
+        "My Assignments",
         "Projects",
+        "Overview",
+        "Documents",
+        "Knowledge Base",
+        "Generate Draft",
+        "Summary & Submit",
+        "Review & Export",
+        "PDF Download",
+        "Word Download",
+    ],
+    "admin": [
+        "My Assignments",
+        "Projects",
+        "User Management",
         "Overview",
         "Documents",
         "Knowledge Base",
@@ -195,7 +261,7 @@ if role not in role_pages:
     st.stop()
 
 st.sidebar.title("Workspace")
-st.sidebar.caption(f"{current_user['email']} · {role.title()}")
+st.sidebar.caption(f"{current_user['email']} · {role_labels[role]}")
 if st.sidebar.button("Log out"):
     clear_auth_state()
     st.rerun()
@@ -356,9 +422,19 @@ def render_download_page(file_format: str):
         f"Review: {review_status or 'pending_human_review'}"
     )
     if review_status != "approved":
-        st.info(
-            "Downloads are available after the Team Lead approves the summary."
-        )
+        if workflow.get("current_stage") in (
+            "pending_human_review",
+            "submitted_to_team_lead",
+            "changes_requested_by_team_lead",
+        ):
+            st.info(
+                "Downloads are available after Team Lead approval."
+            )
+        else:
+            st.info(
+                "Downloads for assigned workflows are available after final "
+                "Administrator approval."
+            )
         return
 
     mime_type = (
@@ -393,8 +469,104 @@ def render_download_page(file_format: str):
         )
 
 
+if page == "User Management":
+    st.subheader("Account roles")
+    st.caption(
+        "New accounts remain Writers until an administrator approves "
+        "their requested role."
+    )
+    try:
+        users = list_users(access_token)
+    except APIError as exc:
+        show_api_error(exc)
+        users = []
+
+    if not isinstance(users, list):
+        st.error("The API returned an invalid user list.")
+        users = []
+
+    role_codes = {
+        "Writer": "writer",
+        "Team Leader": "reviewer",
+        "Project Manager": "project_manager",
+        "Administrator": "admin",
+    }
+    role_labels_by_code = {
+        value: label for label, value in role_codes.items()
+    }
+
+    if users:
+        st.dataframe(
+            [
+                {
+                    "Email": user["email"],
+                    "Current role": role_labels_by_code.get(
+                        user["role"],
+                        user["role"],
+                    ),
+                    "Requested role": role_labels_by_code.get(
+                        user.get("requested_role"),
+                        "None",
+                    ),
+                    "Active": user["is_active"],
+                }
+                for user in users
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+
+        for user in users:
+            current_role = user.get("role", "writer")
+            current_label = role_labels_by_code.get(
+                current_role,
+                "Writer",
+            )
+            requested_role = user.get("requested_role")
+            requested_label = role_labels_by_code.get(
+                requested_role,
+                "No pending role request",
+            )
+            with st.expander(
+                f"{user['email']} · {current_label} · {requested_label}"
+            ):
+                selected_label = st.selectbox(
+                    "Assign workspace role",
+                    options=list(role_codes),
+                    index=list(role_codes).index(current_label),
+                    key=f"admin_role_{user['id']}",
+                )
+                if st.button(
+                    "Save role",
+                    key=f"admin_role_save_{user['id']}",
+                    type="primary",
+                ):
+                    try:
+                        updated_user = update_user_role(
+                            user["id"],
+                            role_codes[selected_label],
+                            access_token,
+                        )
+                        if not isinstance(updated_user, dict):
+                            st.error("The API returned an invalid user.")
+                        else:
+                            st.success(
+                                f"Updated {user['email']} to "
+                                f"{selected_label}."
+                            )
+                            st.rerun()
+                    except APIError as exc:
+                        show_api_error(exc)
+    else:
+        st.info("No user accounts were returned.")
+
+
 if page == "Projects":
-    st.subheader("Your projects")
+    st.subheader(
+        "Projects"
+        if role in ("project_manager", "admin")
+        else "Your projects"
+    )
     if projects:
         st.dataframe(
             [
@@ -412,7 +584,7 @@ if page == "Projects":
     else:
         st.info("No projects are available. Create a project to get started.")
 
-    if role in ("writer", "admin"):
+    if role in ("writer", "project_manager", "admin"):
         st.markdown("### Create a project")
         with st.form("create_project_form"):
             project_name = st.text_input(
@@ -784,8 +956,27 @@ elif page == "Summary & Submit":
                 )
 
             if workflow_status == "completed":
-                if workflow.get("current_stage") == "submitted_to_team_lead":
+                current_stage = workflow.get("current_stage")
+                if current_stage == "submitted_to_team_lead":
                     st.success("Submitted to the Team Lead review queue.")
+                elif current_stage in (
+                    "assigned_to_project_manager",
+                    "assigned_to_team_leader",
+                    "assigned_to_writer",
+                    "team_lead_review",
+                    "project_manager_review",
+                    "admin_review",
+                ):
+                    st.info(
+                        "This workflow is following the role-assignment "
+                        "process. Open My Assignments to continue."
+                    )
+                elif current_stage == "approved_by_admin":
+                    st.success("Approved by an Administrator.")
+                    st.info(
+                        "Use the PDF Download or Word Download navigation "
+                        "option to export the approved summary."
+                    )
                 elif review_status == "approved":
                     st.success("Approved by the Team Lead.")
                     st.info(
@@ -845,6 +1036,280 @@ elif page == "Team Lead Queue":
                 "Use the workflow UUID above in the sidebar, then open "
                 "Review & Export to approve or request changes."
             )
+
+elif page == "My Assignments":
+    st.subheader("My workflow assignments")
+    st.caption(
+        "Each assigned person must complete their action before the workflow "
+        "can move to its next stage."
+    )
+
+    if role == "admin":
+        with st.expander("Assign a workflow to Project Manager(s)"):
+            if st.button("Load unassigned completed workflows"):
+                try:
+                    st.session_state["unassigned_workflows"] = (
+                        get_unassigned_workflows(access_token)
+                    )
+                except APIError as exc:
+                    show_api_error(exc)
+
+            unassigned_data = st.session_state.get("unassigned_workflows", {})
+            unassigned_items = (
+                unassigned_data.get("items", [])
+                if isinstance(unassigned_data, dict)
+                else []
+            )
+            workflow_labels = {
+                item["workflow_id"]: (
+                    f"Project {item['project_id']} · "
+                    f"{item['research_question'][:100]} · "
+                    f"{item['workflow_id']}"
+                )
+                for item in unassigned_items
+            }
+            initial_workflow_id = st.selectbox(
+                "Completed workflow",
+                options=["", *workflow_labels],
+                format_func=lambda value: (
+                    "Select a workflow"
+                    if not value
+                    else workflow_labels[value]
+                ),
+                key="initial_assignment_workflow_id",
+            )
+            if initial_workflow_id and st.button(
+                "Load eligible Project Managers"
+            ):
+                try:
+                    candidates = get_eligible_users(
+                        initial_workflow_id,
+                        access_token,
+                    )
+                    st.session_state["initial_assignment_candidates"] = {
+                        "workflow_id": initial_workflow_id,
+                        "response": candidates,
+                    }
+                except APIError as exc:
+                    show_api_error(exc)
+
+            loaded_candidates = st.session_state.get(
+                "initial_assignment_candidates"
+            )
+            candidates = (
+                loaded_candidates.get("response")
+                if isinstance(loaded_candidates, dict)
+                and loaded_candidates.get("workflow_id") == initial_workflow_id
+                else None
+            )
+            if (
+                isinstance(candidates, dict)
+                and candidates.get("items")
+                and initial_workflow_id
+            ):
+                user_items = candidates["items"]
+                email_to_id = {
+                    item["email"]: item["id"] for item in user_items
+                }
+                selected_emails = st.multiselect(
+                    "Project Managers",
+                    options=list(email_to_id),
+                    key="initial_assignment_selected_users",
+                )
+                if st.button("Assign workflow", type="primary"):
+                    try:
+                        assigned = assign_workflow(
+                            initial_workflow_id,
+                            [email_to_id[email] for email in selected_emails],
+                            access_token,
+                        )
+                        st.success(
+                            "Workflow assigned. It advances after all "
+                            "selected managers forward it."
+                        )
+                        st.json(assigned)
+                        st.session_state.pop(
+                            "initial_assignment_candidates",
+                            None,
+                        )
+                        st.session_state.pop("unassigned_workflows", None)
+                    except APIError as exc:
+                        show_api_error(exc)
+
+    try:
+        assignments_data = get_my_assignments(access_token)
+    except APIError as exc:
+        show_api_error(exc)
+        assignments_data = {}
+
+    assignments = (
+        assignments_data.get("items", [])
+        if isinstance(assignments_data, dict)
+        else []
+    )
+    if not assignments:
+        st.info("There are no pending assignments for your account.")
+    else:
+        stage_labels = {
+            "assigned_to_project_manager": "Assign to Team Lead",
+            "assigned_to_team_leader": "Assign to Writer",
+            "assigned_to_writer": "Write and submit draft",
+            "team_lead_review": "Team Lead review",
+            "project_manager_review": "Project Manager review",
+            "admin_review": "Administrator approval",
+        }
+        for item in assignments:
+            workflow_id_item = item["workflow_id"]
+            with st.container(border=True):
+                st.markdown(
+                    f"**Project {item['project_id']}** · "
+                    f"{stage_labels.get(item['stage'], item['stage'])}"
+                )
+                st.write(item["research_question"])
+                st.code(workflow_id_item)
+
+                if item["stage"] in (
+                    "assigned_to_project_manager",
+                    "assigned_to_team_leader",
+                ):
+                    try:
+                        candidates = get_eligible_users(
+                            workflow_id_item,
+                            access_token,
+                        )
+                    except APIError as exc:
+                        show_api_error(exc)
+                    else:
+                        candidate_items = candidates.get("items", [])
+                        email_to_id = {
+                            candidate["email"]: candidate["id"]
+                            for candidate in candidate_items
+                        }
+                        selected_emails = st.multiselect(
+                            f"Choose {candidates.get('role', 'users')}",
+                            options=list(email_to_id),
+                            key=f"workflow_assignees_{workflow_id_item}",
+                        )
+                        if st.button(
+                            "Assign next stage",
+                            key=f"assign_next_{workflow_id_item}",
+                            type="primary",
+                        ):
+                            try:
+                                result = assign_workflow(
+                                    workflow_id_item,
+                                    [
+                                        email_to_id[email]
+                                        for email in selected_emails
+                                    ],
+                                    access_token,
+                                )
+                                st.success(
+                                    "Your assignment action is recorded. "
+                                    "The workflow advances when all current "
+                                    "assignees have acted."
+                                )
+                                st.json(result)
+                                st.rerun()
+                            except APIError as exc:
+                                show_api_error(exc)
+
+                elif item["stage"] == "assigned_to_writer":
+                    try:
+                        draft_data = get_assigned_draft(
+                            workflow_id_item,
+                            access_token,
+                        )
+                    except APIError as exc:
+                        show_api_error(exc)
+                    else:
+                        revision = draft_data["current_revision"]
+                        content = revision["content"]
+                        with st.form(f"writer_draft_{workflow_id_item}"):
+                            title = st.text_input(
+                                "Title",
+                                value=content.get("title", ""),
+                            )
+                            summary = st.text_area(
+                                "Executive summary",
+                                value=content.get("executive_summary", ""),
+                                height=180,
+                            )
+                            conclusion = st.text_area(
+                                "Conclusion",
+                                value=content.get("conclusion", ""),
+                                height=120,
+                            )
+                            findings_text = st.text_area(
+                                "Key findings (JSON array)",
+                                value=json.dumps(
+                                    content.get("key_findings", []),
+                                    indent=2,
+                                ),
+                                height=120,
+                            )
+                            comment = st.text_area(
+                                "Writer notes",
+                                key=f"writer_comment_{workflow_id_item}",
+                            )
+                            save_button = st.form_submit_button(
+                                "Save draft changes"
+                            )
+                            submit_button = st.form_submit_button(
+                                "Submit to Team Lead",
+                                type="primary",
+                            )
+                        if save_button or submit_button:
+                            try:
+                                key_findings = json.loads(findings_text)
+                                if not isinstance(key_findings, list):
+                                    raise ValueError(
+                                        "Key findings must be a JSON array."
+                                    )
+                                updated_content = {
+                                    **content,
+                                    "title": title,
+                                    "executive_summary": summary,
+                                    "conclusion": conclusion,
+                                    "key_findings": key_findings,
+                                }
+                                save_assigned_draft(
+                                    workflow_id_item,
+                                    updated_content,
+                                    comment,
+                                    access_token,
+                                )
+                                if submit_button:
+                                    complete_assignment(
+                                        workflow_id_item,
+                                        comment,
+                                        access_token,
+                                    )
+                                    st.success("Draft submitted to the Team Lead.")
+                                    st.rerun()
+                                else:
+                                    st.success("Draft changes saved.")
+                            except (APIError, ValueError, json.JSONDecodeError) as exc:
+                                if isinstance(exc, APIError):
+                                    show_api_error(exc)
+                                else:
+                                    st.error(f"Could not save draft: {exc}")
+
+                elif item["stage"] in (
+                    "team_lead_review",
+                    "project_manager_review",
+                    "admin_review",
+                ):
+                    st.caption(
+                        "Open the current revision to review it, then approve "
+                        "or request changes."
+                    )
+                    if st.button(
+                        "Open assigned review",
+                        key=f"open_assignment_review_{workflow_id_item}",
+                    ):
+                        select_queue_workflow(item)
+                        st.rerun()
 
 elif page == "PDF Download":
     render_download_page("pdf")
@@ -973,7 +1438,7 @@ elif page == "Review & Export":
                         show_api_error(exc)
 
             with col2:
-                if st.button("Reject current version"):
+                if st.button("Request changes"):
                     try:
                         result = record_decision(
                             project_id,
@@ -983,7 +1448,7 @@ elif page == "Review & Export":
                             access_token,
                         )
                         st.session_state.pop("review_data", None)
-                        st.warning("Rejection recorded.")
+                        st.warning("Changes requested from the Writer.")
                         st.json(result)
                     except APIError as exc:
                         show_api_error(exc)

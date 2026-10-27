@@ -21,7 +21,9 @@ ALLOWED_STATUSES = {
 def create_project(
     payload: ProjectCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles("writer", "admin")),
+    current_user: User = Depends(
+        require_roles("writer", "project_manager", "admin")
+    ),
 ):
     project = Project(
         name=payload.name,
@@ -43,7 +45,9 @@ def list_projects(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("writer", "reviewer", "admin")),
+    user: User = Depends(
+        require_roles("writer", "reviewer", "project_manager", "admin")
+    ),
 ):
     statement = select(Project)
     if user.role == "writer":
@@ -61,10 +65,15 @@ def list_projects(
 def get_project(
     project_id: int,
     db: Session = Depends(get_db),
+    user: User = Depends(
+        require_roles("writer", "reviewer", "project_manager", "admin")
+    ),
 ):
     project = db.get(Project, project_id)
 
-    if project is None:
+    if project is None or (
+        user.role == "writer" and project.owner_id != user.id
+    ):
         raise HTTPException(
             status_code=404,
             detail="Project not found",
@@ -78,10 +87,15 @@ def update_project(
     project_id: int,
     payload: ProjectUpdate,
     db: Session = Depends(get_db),
+    user: User = Depends(
+        require_roles("writer", "project_manager", "admin")
+    ),
 ):
     project = db.get(Project, project_id)
 
-    if project is None:
+    if project is None or (
+        user.role == "writer" and project.owner_id != user.id
+    ):
         raise HTTPException(
             status_code=404,
             detail="Project not found",
@@ -115,10 +129,15 @@ def update_project(
 def delete_project(
     project_id: int,
     db: Session = Depends(get_db),
+    user: User = Depends(
+        require_roles("writer", "project_manager", "admin")
+    ),
 ):
     project = db.get(Project, project_id)
 
-    if project is None:
+    if project is None or (
+        user.role == "writer" and project.owner_id != user.id
+    ):
         raise HTTPException(
             status_code=404,
             detail="Project not found",

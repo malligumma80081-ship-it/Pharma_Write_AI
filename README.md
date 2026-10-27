@@ -2,8 +2,8 @@
 
 Prototype for human-reviewed, evidence-grounded scientific summaries.
 The application includes authentication, PDF processing, persistent
-knowledge-base indexing, document retrieval, citation checks, and Team Lead
-review workflows.
+knowledge-base indexing, document retrieval, citation checks, and a
+multi-role assignment and approval workflow.
 
 ## Project architecture
 
@@ -16,9 +16,11 @@ draft.
 flowchart TD
     Writer[Writer / Researcher] --> UI[Streamlit dashboard]
     Reviewer[Team Lead / Reviewer] --> UI
+    Manager[Project Manager] --> UI
+    Admin[Administrator] --> UI
     UI -->|HTTP + bearer token| API[FastAPI REST API]
     API --> Auth[Authentication and role checks]
-    API --> SQL[(PostgreSQL / SQLite<br/>users, projects, documents, workflows, revisions)]
+    API --> SQL[(PostgreSQL / SQLite<br/>users, projects, documents, workflows, revisions, assignments)]
 
     API --> Upload[PDF validation and text extraction]
     Upload --> Chunk[Page-aware chunking]
@@ -35,9 +37,9 @@ flowchart TD
     Validate --> UI
 
     UI -->|Submit draft| API
-    API --> Review[Human review and revision workflow]
+    API --> Review[Role-based assignment and review workflow]
     Review --> SQL
-    Review -->|Approved revision only| Export[PDF / Word export]
+    Review -->|Final Admin approval| Export[PDF / Word export]
     Export --> UI
 ```
 
@@ -52,8 +54,8 @@ flowchart TD
 3. The embedding service converts each chunk to a vector. ChromaDB stores the
    vectors with project, document, filename, and page metadata. SQLAlchemy
    stores application records such as users, projects, uploaded documents,
-   workflows, and review revisions in PostgreSQL (Docker) or SQLite (local
-   development).
+   workflows, review revisions, and assignment history in PostgreSQL
+   (Docker) or SQLite (local development).
 4. For a question or draft, the API embeds the query and searches ChromaDB
    within the selected project, with optional document and page filters. It
    sends the most relevant passages—not the entire document collection—to
@@ -63,16 +65,24 @@ flowchart TD
    passages. Knowledge-base questions abstain when the passages do not
    support an answer; draft warnings explain that citation existence alone
    does not verify scientific claims.
-6. A completed draft remains subject to human review. A Team Lead can review
-   it, create revisions, and approve or request changes. The export endpoint
-   only creates PDF or Word files from an approved revision.
+6. A completed draft is assigned through the human workflow. Administrators
+   assign it to Project Manager(s), Project Managers assign it to Team
+   Leader(s), and Team Leaders assign it to Writer(s). Writers submit the
+   revised draft to the Team Leaders, then the Project Managers, and finally
+   the Administrators review it. At each stage every assigned person must
+   act before the workflow advances. Team Leaders and Project Managers can
+   request changes back to the Writers; Administrators can return it to the
+   Team Leaders. Assignment rounds and comments are retained as history.
+   Export for an assigned workflow is enabled only after final Admin
+   approval. Existing workflows without assignment history retain their
+   existing review behavior.
 
 ### Interview walkthrough
 
 **Short project introduction:** PharmaWrite AI is a human-reviewed scientific
 literature assistant. It uses RAG to find evidence in uploaded PDFs, drafts
-structured summaries with citations, and routes those drafts through a Team
-Lead approval workflow before export.
+structured summaries with citations, and routes those drafts through an
+auditable Writer → Team Lead → Project Manager → Admin workflow before export.
 
 **End-to-end explanation:** I would start with the user journey: a writer
 creates a project and uploads research PDFs. The FastAPI backend validates
@@ -80,8 +90,9 @@ each upload, extracts page-aware text, chunks it, and stores its embeddings
 in ChromaDB. When the writer asks a question or starts a draft, the backend
 performs project-scoped semantic retrieval and sends only the matching
 passages to Ollama. The response is structured and its citation IDs are
-checked against the retrieved evidence. The draft is saved for human review;
-only an approved revision can be exported as PDF or Word.
+checked against the retrieved evidence. The draft is saved for human review,
+assigned through the role-based approval chain, and exported only after final
+Admin approval.
 
 **Design choices to discuss:**
 
@@ -159,17 +170,41 @@ python -m streamlit run app/ui/dashboard.py
 The API docs are available at <http://127.0.0.1:8000/docs>.
 Ollama must be running separately with the configured model installed.
 
-Use the UI's **Create account** tab to register, then sign in. New accounts
-receive the `writer` role. Create a project from **Projects** before uploading
-documents and generating drafts; the sidebar lists only projects the signed-in
-writer owns. Admins and Team Leads can view projects across accounts.
-Writers can view a completed summary and submit it to the Team Lead queue.
-PDF and Word downloads are enabled only after approval. `reviewer` accounts
-have a Team Lead Queue and can review submitted summaries; admins can use all
-UI pages. Elevated roles are assigned by an administrator, not selected
-during registration. Run `python scripts/create_admin.py` to create the
-initial administrator. API clients must send the login token as a bearer
-token.
+Use the UI's **Create account** tab to register. Applicants can select
+**Writer**, **Team Leader**, or **Project Manager**; every new account starts
+with Writer permissions, and elevated selections are saved as pending role
+requests until an administrator approves them from **User Management**. The
+signup confirmation identifies the account's active Writer role separately
+from the requested role. Admin accounts cannot be self-registered; an
+existing administrator must grant that role.
+All roles use **My Assignments** to act on work routed to them. Admins assign
+completed workflows to one or more Project Managers; each assigned Manager
+must forward the work to one or more Team Leaders. Each assigned Team Leader
+must assign one or more Writers. Every assigned Writer updates and submits
+the draft, after which all assigned Team Leaders review it, then all assigned
+Project Managers review it, and finally all active Admins approve it.
+Team Leaders and Project Managers can request Writer changes; Admins can
+return a workflow to the Team Leaders. Each assignment round remains in the
+database for auditability. Writers can work on drafts assigned to them even
+when another user owns the project. Project Managers can create and manage
+projects across accounts and generate drafts. For newly assigned workflows,
+PDF and Word downloads require final Admin approval; older workflows without
+assignment history keep their existing Team Lead approval behavior. The
+`admin` role is reserved for administration and has access to all workspaces.
+Run
+`python scripts/create_admin.py` to create the initial administrator. API
+clients must send the login token as a bearer token.
+
+Database migrations must be applied before running the updated API. For local
+SQLite development in PowerShell:
+
+```powershell
+$env:DATABASE_URL = "sqlite:///./pharmawrite.db"
+python -m alembic upgrade head
+```
+
+Administrators can approve role requests or change existing roles from
+**User Management**. Users must sign out and back in after a role change.
 
 Uploaded PDFs are text-extracted and indexed into the project's persistent
 Chroma knowledge base immediately. The index is stored under `data/chroma`
@@ -190,6 +225,20 @@ docker compose up --build
 The Compose setup starts PostgreSQL and the API, and applies migrations
 before starting the API. Set `POSTGRES_PASSWORD` before deployment; the
 default is intended only for local development.
+
+To stop the Compose services, rebuild with the role updates, and start again
+in the background, run these commands from the project root:
+
+```powershell
+docker compose down
+docker compose up --build -d
+docker compose ps
+```
+
+`docker compose down` preserves the named PostgreSQL, ChromaDB, and Ollama
+volumes. Do not add `-v` unless you intend to delete that stored data. Once
+the API is running, an administrator can review and assign account roles from
+the **User Management** page.
 
 ## Tests
 
