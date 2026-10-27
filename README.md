@@ -5,6 +5,100 @@ The application includes authentication, PDF processing, persistent
 knowledge-base indexing, document retrieval, citation checks, and Team Lead
 review workflows.
 
+## Project architecture
+
+PharmaWrite AI is a retrieval-augmented generation (RAG) application. It
+retrieves relevant passages from a user's uploaded research documents and
+provides those passages to a language model as the evidence for its answer or
+draft.
+
+```mermaid
+flowchart TD
+    Writer[Writer / Researcher] --> UI[Streamlit dashboard]
+    Reviewer[Team Lead / Reviewer] --> UI
+    UI -->|HTTP + bearer token| API[FastAPI REST API]
+    API --> Auth[Authentication and role checks]
+    API --> SQL[(PostgreSQL / SQLite<br/>users, projects, documents, workflows, revisions)]
+
+    API --> Upload[PDF validation and text extraction]
+    Upload --> Chunk[Page-aware chunking]
+    Chunk --> Embed[Sentence Transformers embeddings]
+    Embed --> Vectors[(Persistent ChromaDB vector store)]
+
+    UI -->|Question or draft request| API
+    API --> Search[Project-scoped vector search]
+    Search --> Vectors
+    Search --> Prompt[Evidence passages with backend-assigned citation IDs]
+    Prompt --> Model[Ollama language model]
+    Model --> Validate[Structured response and citation validation]
+    Validate --> SQL
+    Validate --> UI
+
+    UI -->|Submit draft| API
+    API --> Review[Human review and revision workflow]
+    Review --> SQL
+    Review -->|Approved revision only| Export[PDF / Word export]
+    Export --> UI
+```
+
+### How a request moves through the system
+
+1. A writer signs in, creates a project, and uploads a PDF through the
+   Streamlit dashboard. The dashboard calls the FastAPI REST API and sends
+   the user's bearer token.
+2. The API checks the user's role and validates the PDF file type, signature,
+   and size. It extracts text, preserving page information, then splits that
+   text into searchable chunks.
+3. The embedding service converts each chunk to a vector. ChromaDB stores the
+   vectors with project, document, filename, and page metadata. SQLAlchemy
+   stores application records such as users, projects, uploaded documents,
+   workflows, and review revisions in PostgreSQL (Docker) or SQLite (local
+   development).
+4. For a question or draft, the API embeds the query and searches ChromaDB
+   within the selected project, with optional document and page filters. It
+   sends the most relevant passages—not the entire document collection—to
+   Ollama with instructions to use only that source material.
+5. The model returns structured output. The API validates its shape and
+   checks generated citation IDs against IDs assigned to the retrieved
+   passages. Knowledge-base questions abstain when the passages do not
+   support an answer; draft warnings explain that citation existence alone
+   does not verify scientific claims.
+6. A completed draft remains subject to human review. A Team Lead can review
+   it, create revisions, and approve or request changes. The export endpoint
+   only creates PDF or Word files from an approved revision.
+
+### Interview walkthrough
+
+**Short project introduction:** PharmaWrite AI is a human-reviewed scientific
+literature assistant. It uses RAG to find evidence in uploaded PDFs, drafts
+structured summaries with citations, and routes those drafts through a Team
+Lead approval workflow before export.
+
+**End-to-end explanation:** I would start with the user journey: a writer
+creates a project and uploads research PDFs. The FastAPI backend validates
+each upload, extracts page-aware text, chunks it, and stores its embeddings
+in ChromaDB. When the writer asks a question or starts a draft, the backend
+performs project-scoped semantic retrieval and sends only the matching
+passages to Ollama. The response is structured and its citation IDs are
+checked against the retrieved evidence. The draft is saved for human review;
+only an approved revision can be exported as PDF or Word.
+
+**Design choices to discuss:**
+
+- **Why RAG?** It grounds generated responses in the project's uploaded
+  documents and lets the application return source filenames and page
+  references instead of relying solely on a model's general knowledge.
+- **Why two stores?** SQL stores relational application state and review
+  history; ChromaDB stores and searches document-chunk embeddings.
+- **How are unsupported claims handled?** The model is instructed to use
+  supplied evidence only; response schemas and citation validation catch
+  malformed or fabricated references, and the workflow preserves abstention,
+  warnings, and human review.
+- **What are the limitations?** Citation validation proves that a cited
+  passage was retrieved, not that it scientifically supports every claim.
+  Human review remains necessary, and image-only or scanned PDFs may need
+  OCR before their text can be searched.
+
 ## Local setup
 
 Run the following commands from the project root (the directory containing
@@ -123,7 +217,8 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 ![Answer & Source](image-7.png)
 
 ## Generate_draft
-![Generate_draft & Research question & document UUID](image-8.png)
+![alt text](image-17.png)
+![alt text](image-18.png)
 
 ## Summary & Submit to Team_Lead
 ![Summary Answer](image-11.png)
@@ -138,3 +233,25 @@ When it give the Team Lead Approval  it can access to download it
 
 ![Download_PDF](image-18.png)
 ![Download_Word](image-19.png)
+
+## Database Screenshots
+## Document
+![alt text](image-19.png)
+
+## Draft_revision
+![alt text](image-20.png)
+
+## Literature_workflow
+![alt text](image-21.png)
+
+## Projects
+![alt text](image-22.png)
+
+## Study_Evidence
+![alt text](image-23.png)
+
+## User
+![alt text](image-24.png)
+
+## Alembic_Version
+![alt text](image-25.png)
