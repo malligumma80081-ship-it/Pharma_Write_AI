@@ -7,30 +7,34 @@ review workflows.
 
 ## Local setup
 
+Run the following commands from the project root (the directory containing
+this README). If your terminal is at the parent directory, enter the project
+first:
+
+```powershell
+Set-Location .\pharmawrite-ai
+```
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 Copy-Item .env.example .env
-docker compose up -d postgres
 ```
 
-Set `DATABASE_URL` in `.env` to the following local development value
-(already present in `.env.example`):
+The `DATABASE_URL` in `.env.example` is for Docker Compose, where `postgres`
+resolves to the PostgreSQL service. The sample value below is for Docker only;
+it will not resolve when Uvicorn runs directly on Windows:
 
 ```text
 postgresql+psycopg://pharmawrite:pharmawrite_dev@localhost:5432/pharmawrite
 ```
 
-If PostgreSQL is unavailable, SQLite can be used for local development by
-setting `DATABASE_URL=sqlite:///./pharmawrite.db` in `.env`. The SQLite
-database file is created in the project root when migrations run.
+```powershell
+$env:DATABASE_URL = "sqlite:///./pharmawrite.db"
+```
 
-When running the API directly on Windows, configure `DATABASE_URL` with a
-reachable host (use `localhost` for host PostgreSQL or
-`sqlite:///./pharmawrite.db` for SQLite). The hostname `postgres` is only
-resolvable inside the Docker Compose network. The Compose PostgreSQL service
-is named `postgres`.
+The SQLite database file is created in the project root when migrations run.
 
 Local Ollama generation is allowed up to 15 minutes per model request by
 `OLLAMA_TIMEOUT_SECONDS`. The UI allows up to about 32 minutes for a complete
@@ -50,9 +54,11 @@ python -m alembic upgrade head
 python -m uvicorn app.main:app --reload
 ```
 
-In another terminal, run the complete UI:
+Open another terminal at the project root and activate the virtual environment
+there too, then run the complete UI:
 
 ```powershell
+.\.venv\Scripts\Activate.ps1
 python -m streamlit run app/ui/dashboard.py
 ```
 
@@ -97,3 +103,38 @@ default is intended only for local development.
 python -m pytest
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
+## UI  Screenshots 
+
+## Login & Register Page 
+![Sign in ](image-1.png)
+![Create_account](image-2.png)
+
+## Creates Projects
+![Crate Projects](image-3.png)
+
+## Overview
+![Project_Overview & Workflow Summary](image-4.png)
+
+## Documents Uploads
+![Document_Management & Project Document ](image-5.png)
+
+## Knowledge_base
+![Research_Question](image-6.png)
+![Answer & Source](image-7.png)
+
+## Generate_draft
+![Generate_draft & Research question & document UUID](image-8.png)
+
+## Summary & Submit to Team_Lead
+![Summary Answer](image-11.png)
+![Key_Finding_1](image-12.png)
+![Key_Finding_2](image-13.png)
+![Key_Finding_3](image-14.png)
+![Key_Finding_4](image-15.png)
+![Key_Finding_5](image-16.png)
+![Conclusion](image-17.png)
+## PDF & Word Document Download 
+When it give the Team Lead Approval  it can access to download it 
+
+![Download_PDF](image-18.png)
+![Download_Word](image-19.png)
