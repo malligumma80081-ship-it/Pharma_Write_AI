@@ -66,7 +66,7 @@ def root():
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "service": "pharmawrite-api"}
+    return {"status": "ok"}
 
 
 @app.get("/health/database")

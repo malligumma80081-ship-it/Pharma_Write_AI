@@ -1,7 +1,12 @@
+import os
+
 import requests
 import streamlit as st
 
-API_BASE = "http://127.0.0.1:8000/api/v1"
+API_BASE = (
+    f"{os.getenv('PHARMAWRITE_API_URL', 'http://localhost:8000').rstrip('/')}"
+    "/api/v1"
+)
 
 st.set_page_config(
     page_title="PharmaWrite AI",
