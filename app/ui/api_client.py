@@ -179,8 +179,19 @@ def request_json(method, path, **kwargs):
             **kwargs,
         )
         response.raise_for_status()
+    except requests.Timeout as exc:
+        raise APIError(
+            "The API request timed out. Verify that the API service is "
+            "running and that PHARMAWRITE_API_URL points to its Render URL."
+        ) from exc
+    except requests.ConnectionError as exc:
+        raise APIError(
+            "Could not connect to the API. Set PHARMAWRITE_API_URL on the "
+            "Render UI service to the API service's public URL, not "
+            "localhost."
+        ) from exc
     except requests.RequestException as exc:
-        detail = "The API request failed."
+        detail = f"The API request failed ({type(exc).__name__})."
         response = getattr(exc, "response", None)
 
         if response is not None:
@@ -189,7 +200,7 @@ def request_json(method, path, **kwargs):
                 if isinstance(payload, dict):
                     detail = payload.get("detail", detail)
             except (ValueError, AttributeError, TypeError):
-                pass
+                detail = f"The API returned HTTP {response.status_code}."
 
         raise APIError(str(detail)) from exc
 
